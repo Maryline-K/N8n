@@ -1,0 +1,294 @@
+{
+  "name": "AWS Compromise Containment",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "aws-security-alert",
+        "responseMode": "onReceived",
+        "options": {
+          "responseData": "success",
+          "responseBody": "Alert received"
+        }
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 260]
+    },
+    {
+      "parameters": {
+        "functionCode": "return items.map(item => {\n  const body = item.json || {};\n  const raw = body.detail || body;\n  const source = (body.source || raw.source || '').toString().toLowerCase();\n  const alert = raw.alert || raw.finding || raw;\n\n  const normalized = {\n    alert_id: alert.id || alert.findingId || alert.id || alert.uuid || null,\n    source: source.includes('wiz') ? 'Wiz' : source.includes('guardduty') ? 'GuardDuty' : (body.source || raw.source || 'Unknown'),\n    severity: alert.severity || alert.severityLabel || alert.severityScore || alert.riskScore || null,\n    region: alert.region || raw.region || raw.awsRegion || alert.awsRegion || null,\n    description: alert.description || alert.title || alert.summary || raw.description || null,\n    timestamp: alert.createdAt || alert.eventTime || alert.updatedAt || raw.timestamp || new Date().toISOString(),\n    original_alert: raw,\n    resource_type: null,\n    resource_arn: null,\n    resource_name: null\n  };\n\n  const resource = alert.resource || raw.resource || alert.awsEntity || alert.resourceDetails || {};\n  if (resource) {\n    normalized.resource_type = resource.type || resource.resourceType || resource.kind || resource.awsResourceType || '';\n    normalized.resource_arn = resource.arn || resource.resourceArn || resource.awsArn || resource.awsResourceArn || null;\n    normalized.resource_name = resource.name || resource.resourceName || resource.bucketName || resource.instanceId || null;\n  }\n\n  if (!normalized.resource_arn && normalized.resource_type && normalized.resource_type.toLowerCase().includes('s3')) {\n    normalized.resource_arn = alert.bucketArn || alert.bucketName ? `arn:aws:s3:::${alert.bucketName || resource.bucketName}` : null;\n  }\n\n  if (!normalized.resource_type && normalized.resource_arn) {\n    if (normalized.resource_arn.includes('s3:::')) normalized.resource_type = 'S3';\n    else if (normalized.resource_arn.includes('ec2:instance')) normalized.resource_type = 'EC2';\n    else if (normalized.resource_arn.includes(':iam::')) normalized.resource_type = 'IAM';\n  }\n\n  if (!normalized.resource_name && normalized.resource_arn && normalized.resource_arn.includes('s3:::')) {\n    normalized.resource_name = normalized.resource_arn.split('arn:aws:s3:::')[1];\n  }\n\n  return { json: normalized };\n});"
+      },
+      "name": "Normalize Alert",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [500, 260]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json[\"resource_type\"]?.toString().toLowerCase()}}",
+              "operation": "contains",
+              "value2": "s3"
+            }
+          ]
+        }
+      },
+      "name": "Is S3 Alert?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [700, 260]
+    },
+    {
+      "parameters": {
+        "resource": "s3",
+        "operation": "getBucketAcl",
+        "bucket": "= {{$json[\"resource_name\"] || $json[\"resource_arn\"]?.split('arn:aws:s3:::')[1] }}"
+      },
+      "name": "Get S3 Metadata",
+      "type": "n8n-nodes-base.aws",
+      "typeVersion": 1,
+      "position": [920, 160]
+    },
+    {
+      "parameters": {
+        "mode": "mergeByIndex",
+        "joinBy": "all"
+      },
+      "name": "Merge Metadata",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [1140, 220]
+    },
+    {
+      "parameters": {
+        "functionCode": "return items.map(item => {\n  const data = item.json || {};\n  const severity = parseFloat(data.severity) || 0;\n  const isS3 = (data.resource_type || '').toString().toLowerCase().includes('s3');\n  const score = Math.min(100, Math.round((severity || 0) * 12 + (isS3 ? 20 : 0)));\n  const autoContain = isS3 && score >= 40;\n  const decision = autoContain ? 'contain' : score >= 25 ? 'review' : 'monitor';\n  return {\n    json: {\n      ...data,\n      risk_score: score,\n      decision,\n      autoContain,\n      containment_action: autoContain ? 'block_public_and_deny_bucket_policy' : null,\n      notification_subject: autoContain ? `AWS Compromise Containment Required for ${data.resource_name || data.resource_arn}` : `AWS Alert - ${data.alert_id || 'Unknown'}`\n    }\n  };\n});"
+      },
+      "name": "Decision",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1380, 220]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"autoContain\"] === true}}",
+              "operation": "equal"
+            }
+          ]
+        }
+      },
+      "name": "Containment Required?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1500, 220]
+    },
+    {
+      "parameters": {
+        "resource": "s3",
+        "operation": "putBucketPublicAccessBlock",
+        "bucket": "= {{$json[\"resource_name\"] || $json[\"resource_arn\"]?.split('arn:aws:s3:::')[1] }}",
+        "publicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "IgnorePublicAcls": true,
+          "BlockPublicPolicy": true,
+          "RestrictPublicBuckets": true
+        }
+      },
+      "name": "Contain S3 Bucket",
+      "type": "n8n-nodes-base.aws",
+      "typeVersion": 1,
+      "position": [1700, 140]
+    },
+    {
+      "parameters": {
+        "resource": "s3",
+        "operation": "putBucketPolicy",
+        "bucket": "= {{$json[\"resource_name\"] || $json[\"resource_arn\"]?.split('arn:aws:s3:::')[1] }}",
+        "policy": "={\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"DenyAllAccessExceptAllowedRoles\",\"Effect\":\"Deny\",\"NotPrincipal\":{\"AWS\":[\"arn:aws:iam::*:role/SecurityOps\",\"arn:aws:iam::*:role/SRE\"]},\"Action\":\"s3:*\",\"Resource\":[\"arn:aws:s3:::{{$json['resource_name'] || $json['resource_arn']?.split('arn:aws:s3:::')[1]}}\",\"arn:aws:s3:::{{$json['resource_name'] || $json['resource_arn']?.split('arn:aws:s3:::')[1]}}/*\"]}]}"
+      },
+      "name": "Deny S3 Bucket Policy",
+      "type": "n8n-nodes-base.aws",
+      "typeVersion": 1,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "={{$json[\"autoContain\"] ? 'contained' : 'review_required' }}"
+            },
+            {
+              "name": "message",
+              "value": "=AWS alert processed. Decision: {{$json[\"decision\"]}}. Resource: {{$json[\"resource_arn\"] || $json[\"resource_name\"]}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "No Containment",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [1600, 420]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@example.com",
+        "toEmail": "security-team@example.com",
+        "subject": "=AWS Compromise Containment Alert: {{$json[\"resource_name\"] || $json[\"resource_arn\"]}}",
+        "text": "=Alert ID: {{$json[\"alert_id\"]}}\nSource: {{$json[\"source\"]}}\nDecision: {{$json[\"decision\"]}}\nRisk score: {{$json[\"risk_score\"]}}\nResource: {{$json[\"resource_arn\"] || $json[\"resource_name\"]}}\nAction: {{$json[\"containment_action\"] || 'none'}}\nMessage: {{$json[\"message\"] || 'No automatic containment executed'}}"
+      },
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 1,
+      "position": [1840, 220]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Alert": {
+      "main": [
+        [
+          {
+            "node": "Is S3 Alert?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is S3 Alert?": {
+      "main": [
+        [
+          {
+            "node": "Get S3 Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "main1": [
+        [
+          {
+            "node": "Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get S3 Metadata": {
+      "main": [
+        [
+          {
+            "node": "Merge Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Metadata": {
+      "main": [
+        [
+          {
+            "node": "Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decision": {
+      "main": [
+        [
+          {
+            "node": "Containment Required?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "No Containment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contain S3 Bucket": {
+      "main": [
+        [
+          {
+            "node": "Deny S3 Bucket Policy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Containment Required?": {
+      "main": [
+        [
+          {
+            "node": "Contain S3 Bucket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "main1": [
+        [
+          {
+            "node": "No Containment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deny S3 Bucket Policy": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "No Containment": {
+      "main": [
+        [
+          {
+            "node": "Notify Team",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "id": "1"
+}

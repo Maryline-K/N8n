@@ -1,0 +1,670 @@
+{
+  "name": "wiz-workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "2d5cafc5-e578-49af-84c0-9922e8ff5e3c",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1008,
+        400
+      ],
+      "id": "45c68061-be8a-4a47-8664-7089c860cec0",
+      "name": "Webhook",
+      "webhookId": "2d5cafc5-e578-49af-84c0-9922e8ff5e3c",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "435c6103-9f99-4bc9-8463-52e332afcad4",
+              "leftValue": "={{ $json.needsContainment }}",
+              "rightValue": "={{ $json.resourceType }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "3bd46182-95f9-45aa-aa20-7b4d10b1d95d",
+              "leftValue": "=\t{{ $json.resourceType }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "4b9dfd09-b825-4737-9874-249781c1f82c",
+              "leftValue": "={{ $json.severity }}",
+              "rightValue": 7,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            },
+            {
+              "id": "ef9bbe29-7bbb-4ccb-965d-0a150895121b",
+              "leftValue": "={{ $json.resourceId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "159cb74c-8a4c-4b88-ba47-c3d5da2463cb",
+              "leftValue": "={{ $json.severity }}",
+              "rightValue": 70,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -592,
+        400
+      ],
+      "id": "ee049537-2a8b-4a50-a225-b7fbf1dfa1b4",
+      "name": "Determine Containment Action (IF Node)"
+    },
+    {
+      "parameters": {
+        "topic": {
+          "__rl": true,
+          "value": "arn:aws:sns:us-east-1:104350168521:test-topic",
+          "mode": "list",
+          "cachedResultName": "test-topic",
+          "cachedResultUrl": "https://us-east-1.console.aws.amazon.com/sns/v3/home?region=us-east-1#/topic/arn:aws:sns:us-east-1:104350168521:test-topic"
+        },
+        "subject": "={{ 'INFO: ' + $json.sirtID + ' - ' + $json.alertType + ' (No containment needed)' }}",
+        "message": "=AWS SECURITY - INFORMATIONAL ALERT\n========================================\n\nSIR ID: {{ $json.sirtID }}\nAlert Type: {{ $json.alertType }}\nSeverity: {{ $json.severity }}\nResource: {{ $json.resourceType }} - {{ $json.resourceId }}\nAccount: {{ $json.accountId }}\nRegion: {{ $json.region }}\n\nNo containment action was triggered because:\n- Severity is below threshold ({{ $json.severity }} < 7)\n- Resource type is not critical\n- Alert type does not require immediate containment\n\nPlease review this alert and take action if needed.\n========================================"
+      },
+      "type": "n8n-nodes-base.awsSns",
+      "typeVersion": 1,
+      "position": [
+        -304,
+        544
+      ],
+      "id": "9dba6aaf-37c5-4ada-8395-8986f2bb915f",
+      "name": "AWS SNS",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "topic": {
+          "__rl": true,
+          "value": "arn:aws:sns:us-east-1:104350168521:test-topic",
+          "mode": "list",
+          "cachedResultName": "test-topic",
+          "cachedResultUrl": "https://us-east-1.console.aws.amazon.com/sns/v3/home?region=us-east-1#/topic/arn:aws:sns:us-east-1:104350168521:test-topic"
+        },
+        "subject": "={{ 'Security Alert: ' + $json.sirtID + ' - ' + $json.resourceType }}",
+        "message": "={{ 'Security Alert: ' + $json.sirtID + ' - ' + $json.resourceType }}"
+      },
+      "type": "n8n-nodes-base.awsSns",
+      "typeVersion": 1,
+      "position": [
+        1008,
+        64
+      ],
+      "id": "54a296f5-58d4-4fe3-b535-1fdac558c0fa",
+      "name": "AWS SNS1",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the previous node\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Build Comprehensive Log Entry\n// ============================================\nconst logEntry = {\n  // Workflow metadata\n  workflowName: 'aws-security-containment',\n  workflowVersion: '1.0.0',\n  timestamp: new Date().toISOString(),\n  executionId: data.executionId || 'unknown',\n  \n  // Alert details\n  sirtID: data.sirtID || 'SIR-UNKNOWN',\n  alertType: data.alertType || 'Unknown',\n  alertDescription: data.alertDescription || '',\n  alertSource: data.findingSource || 'GuardDuty',\n  severity: data.severity || 0,\n  \n  // Resource details\n  resourceType: data.resourceType || 'unknown',\n  resourceId: data.resourceId || 'unknown',\n  resourceArn: data.resourceArn || '',\n  accountId: data.accountId || 'unknown',\n  region: data.region || 'us-east-1',\n  \n  // Lambda execution\n  lambdaFunction: data.functionName || 'unknown',\n  lambdaPayload: data.lambdaPayload || {},\n  lambdaResponse: data.lambdaResponse || {},\n  lambdaParsedResponse: data.parsedResponse || {},\n  \n  // Containment details\n  containmentStatus: data.executionStatus || 'unknown',\n  containmentActions: data.containmentDetails?.details || [],\n  needsManualIntervention: data.needsManualIntervention || false,\n  manualInterventionReason: data.manualInterventionReason || '',\n  \n  // Error handling\n  errorMessage: data.errorMessage || null,\n  \n  // Summary\n  summary: data.summary || 'No summary available',\n  \n  // Additional metadata\n  slackText: data.slackText || '',\n  tags: ['security', 'containment', 'automated-response']\n};\n\n// ============================================\n// STEP 2: Build CloudWatch Log Formats\n// ============================================\n\n// 2a: JSON Log (structured for CloudWatch)\nconst jsonLog = JSON.stringify(logEntry);\n\n// 2b: Human-Readable Log (for CloudWatch console)\nlet humanReadableLog = '========================================\\n';\nhumanReadableLog += 'AWS SECURITY - CONTAINMENT LOG\\n';\nhumanReadableLog += '========================================\\n\\n';\nhumanReadableLog += 'Timestamp: ' + logEntry.timestamp + '\\n';\nhumanReadableLog += 'SIR ID: ' + logEntry.sirtID + '\\n';\nhumanReadableLog += 'Execution ID: ' + logEntry.executionId + '\\n\\n';\n\nhumanReadableLog += '--- ALERT DETAILS ---\\n';\nhumanReadableLog += 'Type: ' + logEntry.alertType + '\\n';\nhumanReadableLog += 'Source: ' + logEntry.alertSource + '\\n';\nhumanReadableLog += 'Severity: ' + logEntry.severity + '\\n';\nhumanReadableLog += 'Description: ' + logEntry.alertDescription + '\\n\\n';\n\nhumanReadableLog += '--- RESOURCE DETAILS ---\\n';\nhumanReadableLog += 'Type: ' + logEntry.resourceType + '\\n';\nhumanReadableLog += 'ID: ' + logEntry.resourceId + '\\n';\nhumanReadableLog += 'Account: ' + logEntry.accountId + '\\n';\nhumanReadableLog += 'Region: ' + logEntry.region + '\\n\\n';\n\nhumanReadableLog += '--- CONTAINMENT ---\\n';\nhumanReadableLog += 'Status: ' + logEntry.containmentStatus + '\\n';\nhumanReadableLog += 'Lambda: ' + logEntry.lambdaFunction + '\\n';\nif (logEntry.containmentActions.length > 0) {\n  humanReadableLog += 'Actions:\\n';\n  for (let i = 0; i < logEntry.containmentActions.length; i++) {\n    humanReadableLog += '  - ' + logEntry.containmentActions[i] + '\\n';\n  }\n}\nhumanReadableLog += '\\n';\n\nif (logEntry.needsManualIntervention) {\n  humanReadableLog += '⚠️ MANUAL INTERVENTION REQUIRED!\\n';\n  humanReadableLog += 'Reason: ' + logEntry.manualInterventionReason + '\\n\\n';\n}\n\nif (logEntry.errorMessage) {\n  humanReadableLog += '❌ ERROR:\\n';\n  humanReadableLog += logEntry.errorMessage + '\\n\\n';\n}\n\nhumanReadableLog += 'Summary: ' + logEntry.summary + '\\n';\nhumanReadableLog += '========================================\\n';\n\n// ============================================\n// STEP 3: Prepare CloudWatch Log Events\n// ============================================\nconst timestamp = Date.now();\n\n// 3a: Single log event (JSON)\nconst cloudwatchJsonEvent = {\n  logGroupName: '/aws/security/containment',\n  logStreamName: logEntry.region + '/' + logEntry.accountId,\n  logEvents: [{\n    timestamp: timestamp,\n    message: jsonLog\n  }]\n};\n\n// 3b: Multiple log events (JSON + Human-readable)\nconst cloudwatchEvents = {\n  logGroupName: '/aws/security/containment',\n  logStreamName: logEntry.region + '/' + logEntry.accountId,\n  logEvents: [\n    {\n      timestamp: timestamp,\n      message: jsonLog\n    },\n    {\n      timestamp: timestamp + 1,\n      message: humanReadableLog\n    }\n  ]\n};\n\n// 3c: With severity-based filtering (for CloudWatch Insights)\nconst cloudwatchStructuredLog = {\n  logGroupName: '/aws/security/containment',\n  logStreamName: logEntry.region + '/' + logEntry.accountId,\n  logEvents: [{\n    timestamp: timestamp,\n    message: JSON.stringify({\n      ...logEntry,\n      // Add severity level for CloudWatch Logs Insights\n      logLevel: logEntry.severity >= 7 ? 'HIGH' : \n                logEntry.severity >= 4 ? 'MEDIUM' : 'LOW',\n      status: logEntry.containmentStatus,\n      // Add for easier querying\n      '@timestamp': logEntry.timestamp,\n      '@message': jsonLog\n    })\n  }]\n};\n\n// ============================================\n// STEP 4: Return Data for CloudWatch Upload\n// ============================================\nreturn [{\n  json: {\n    // Original data\n    ...data,\n    \n    // Log entries\n    logEntry: logEntry,\n    jsonLog: jsonLog,\n    humanReadableLog: humanReadableLog,\n    \n    // CloudWatch configurations\n    cloudwatch: {\n      logGroupName: '/aws/security/containment',\n      logStreamName: logEntry.region + '/' + logEntry.accountId,\n      region: logEntry.region,\n      accountId: logEntry.accountId\n    },\n    \n    // CloudWatch log events (choose one)\n    cloudwatchJsonEvent: cloudwatchJsonEvent,\n    cloudwatchEvents: cloudwatchEvents,\n    cloudwatchStructuredLog: cloudwatchStructuredLog,\n    \n    // For individual log event (AWS CloudWatch Logs node)\n    logGroupName: '/aws/security/containment',\n    logStreamName: logEntry.region + '/' + logEntry.accountId,\n    logEvent: {\n      timestamp: timestamp,\n      message: jsonLog\n    },\n    \n    // Status\n    logged: true,\n    logTimestamp: logEntry.timestamp,\n    logSummary: 'Logged containment for ' + logEntry.sirtID + ' (' + logEntry.resourceId + ')'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        48
+      ],
+      "id": "4b0332b3-3748-4e33-b026-19e8923d76bc",
+      "name": "Code ( CloudWatch-Focused Logging)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=\thttps://logs.{{ $json.region }}.amazonaws.com/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Headers",
+              "value": "=Content-Type: application/x-amz-json-1.1"
+            },
+            {
+              "name": "Headers",
+              "value": "X-Amz-Target: Logs_20140328.PutLogEvents"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={{ $json.cloudwatchEvents | json }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1408,
+        32
+      ],
+      "id": "96cf34fb-28dd-44c4-8610-c100d6db73ad",
+      "name": "CloudWatch Post",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the previous node\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Build Comprehensive Log Entry\n// ============================================\nconst logEntry = {\n  // Workflow metadata\n  workflowName: 'aws-security-containment',\n  workflowVersion: '1.0.0',\n  timestamp: new Date().toISOString(),\n  executionId: data.executionId || 'unknown',\n  \n  // Alert details\n  sirtID: data.sirtID || 'SIR-UNKNOWN',\n  alertType: data.alertType || 'Unknown',\n  alertDescription: data.alertDescription || '',\n  alertSource: data.findingSource || 'GuardDuty',\n  severity: data.severity || 0,\n  \n  // Resource details\n  resourceType: data.resourceType || 'unknown',\n  resourceId: data.resourceId || 'unknown',\n  resourceArn: data.resourceArn || '',\n  accountId: data.accountId || 'unknown',\n  region: data.region || 'us-east-1',\n  \n  // Lambda execution\n  lambdaFunction: data.functionName || 'unknown',\n  lambdaPayload: data.lambdaPayload || {},\n  lambdaResponse: data.lambdaResponse || {},\n  lambdaParsedResponse: data.parsedResponse || {},\n  \n  // Containment details\n  containmentStatus: data.executionStatus || 'unknown',\n  containmentActions: data.containmentDetails?.details || [],\n  needsManualIntervention: data.needsManualIntervention || false,\n  manualInterventionReason: data.manualInterventionReason || '',\n  \n  // Error handling\n  errorMessage: data.errorMessage || null,\n  \n  // Summary\n  summary: data.summary || 'No summary available',\n  \n  // Additional metadata\n  slackText: data.slackText || '',\n  tags: ['security', 'containment', 'automated-response']\n};\n\n// ============================================\n// STEP 2: Build Splunk Log Formats\n// ============================================\n\n// 2a: Single event (for Splunk HEC)\nconst splunkSingleEvent = {\n  event: logEntry,\n  sourcetype: 'aws-security-containment',\n  index: 'security',\n  source: 'n8n-workflow',\n  host: 'aws-containment-automation'\n};\n\n// 2b: Multiple events (batch mode)\nconst splunkBatchEvents = {\n  events: [\n    {\n      event: logEntry,\n      sourcetype: 'aws-security-containment',\n      index: 'security',\n      source: 'n8n-workflow',\n      host: 'aws-containment-automation'\n    }\n  ]\n};\n\n// 2c: Raw data format (for non-JSON endpoints)\nconst splunkRawEvent = {\n  event: JSON.stringify(logEntry),\n  sourcetype: 'json',\n  index: 'security'\n};\n\n// 2d: With custom metadata (for Splunk search optimization)\nconst splunkEnhancedEvent = {\n  event: {\n    ...logEntry,\n    // Add Splunk-optimized fields\n    severity_level: logEntry.severity >= 7 ? 'critical' : \n                     logEntry.severity >= 4 ? 'high' : 'medium',\n    resource_category: logEntry.resourceType,\n    containment_required: logEntry.needsManualIntervention ? 'yes' : 'no',\n    execution_time: new Date().toISOString()\n  },\n  sourcetype: 'aws-security-containment',\n  index: 'security',\n  source: 'n8n-workflow',\n  host: 'aws-containment-automation'\n};\n\n// ============================================\n// STEP 3: Build Splunk-Friendly Log Formats\n// ============================================\n\n// 3a: JSON for Splunk (structured)\nconst splunkJsonLog = JSON.stringify(logEntry);\n\n// 3b: Human-readable for Splunk (for free text search)\nlet splunkHumanReadable = 'TIMESTAMP=' + logEntry.timestamp + ' ';\nsplunkHumanReadable += 'SIR_ID=' + logEntry.sirtID + ' ';\nsplunkHumanReadable += 'RESOURCE_TYPE=' + logEntry.resourceType + ' ';\nsplunkHumanReadable += 'RESOURCE_ID=' + logEntry.resourceId + ' ';\nsplunkHumanReadable += 'ACCOUNT=' + logEntry.accountId + ' ';\nsplunkHumanReadable += 'REGION=' + logEntry.region + ' ';\nsplunkHumanReadable += 'SEVERITY=' + logEntry.severity + ' ';\nsplunkHumanReadable += 'STATUS=' + logEntry.containmentStatus + ' ';\nsplunkHumanReadable += 'LAMBDA=' + logEntry.lambdaFunction + ' ';\nif (logEntry.errorMessage) {\n  splunkHumanReadable += 'ERROR=' + logEntry.errorMessage + ' ';\n}\nsplunkHumanReadable += 'SUMMARY=' + logEntry.summary;\n\n// 3c: Key-Value format (Splunk default)\nlet splunkKeyValue = '';\nfor (const [key, value] of Object.entries(logEntry)) {\n  if (value !== null && value !== undefined) {\n    if (typeof value === 'object') {\n      splunkKeyValue += key + '=' + JSON.stringify(value) + ' ';\n    } else {\n      splunkKeyValue += key + '=' + value + ' ';\n    }\n  }\n}\n\n// ============================================\n// STEP 4: Prepare Splunk HEC Configurations\n// ============================================\n\n// Splunk HEC configuration (for HTTP Request node)\nconst splunkConfig = {\n  endpoint: 'https://your-splunk-instance:8088/services/collector',\n  authHeader: 'Splunk YOUR_HEC_TOKEN', // Replace with your actual token\n  headers: {\n    'Authorization': 'Splunk YOUR_HEC_TOKEN',\n    'Content-Type': 'application/json'\n  },\n  // Use one of the event formats above\n  body: splunkSingleEvent\n};\n\n// ============================================\n// STEP 5: Return Data for Splunk Upload\n// ============================================\nreturn [{\n  json: {\n    // Original data\n    ...data,\n    \n    // Log entries\n    logEntry: logEntry,\n    splunkJsonLog: splunkJsonLog,\n    splunkHumanReadable: splunkHumanReadable,\n    splunkKeyValue: splunkKeyValue,\n    \n    // Splunk event formats\n    splunkSingleEvent: splunkSingleEvent,\n    splunkBatchEvents: splunkBatchEvents,\n    splunkEnhancedEvent: splunkEnhancedEvent,\n    \n    // Splunk configuration\n    splunkConfig: splunkConfig,\n    splunkEndpoint: 'https://your-splunk-instance:8088/services/collector',\n    splunkAuthHeader: 'Splunk YOUR_HEC_TOKEN',\n    \n    // For quick copy-paste\n    splunkRawBody: JSON.stringify(splunkSingleEvent),\n    \n    // Status\n    logged: true,\n    logTimestamp: logEntry.timestamp,\n    logSummary: 'Logged containment for ' + logEntry.sirtID + ' (' + logEntry.resourceId + ')'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        672
+      ],
+      "id": "554a011b-4b11-4087-85a7-e5921ce99dce",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "resource": "report",
+        "operation": "get",
+        "reportId": {
+          "__rl": true,
+          "value": "={{ $json.splunkMessage }}",
+          "mode": "id"
+        }
+      },
+      "type": "n8n-nodes-base.splunk",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        640
+      ],
+      "id": "d24f8e9f-db86-4c10-891c-ddd121fb25a3",
+      "name": "Get a search report",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "function": "={{ $json.functionName }}",
+        "payload": "= {{ $json.lambdaPayload }}"
+      },
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        336,
+        -416
+      ],
+      "id": "878c0acd-39f3-4c30-9356-a68c41ecff82",
+      "name": "Invoke AWS Lambda",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.provider }}",
+                    "rightValue": "aws",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "bd8a7f4c-e11a-4fbc-8751-fdf9df72e14c"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "3cafd37a-3fa5-4cd9-97b2-1b44b656fdda",
+                    "leftValue": "=\t{{ $json.provider }}",
+                    "rightValue": "gcp",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "7f0d734b-5686-4fac-9175-07c513422594",
+                    "leftValue": "=\t{{ $json.provider }}",
+                    "rightValue": "azure",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "d6228e39-a879-42f1-8633-ead16cd713d7",
+                    "leftValue": "={{ $json.provider }}",
+                    "rightValue": "openshift",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "14b7154d-9470-4a93-8a82-67a035e8bf1a",
+                    "leftValue": "={{ $json.provider }}",
+                    "rightValue": "ms365",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "ignoreCase": false,
+          "allMatchingOutputs": false
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        -176
+      ],
+      "id": "8eb5da64-55a0-4cf3-8494-99b45ae479bf",
+      "name": "Switch(Providers)",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the webhook\nconst data = $input.first().json;\n\n// --- Assume the Wiz finding is directly at $input.first().json ---\nconst finding = data;\n\n// --- Initialize Variables ---\nlet resourceId = null;\nlet resourceType = null;\nlet resourceArn = null;\nlet accountId = null;\nlet severity = null;\nlet alertType = null;\nlet alertDescription = null;\nlet region = null;\nlet provider = 'unknown'; // aws, gcp, azure\nlet findingSource = 'Wiz';\nlet needsContainment = false;\nlet rawResourceId = null;\n\n// --- Helper: Extract provider from ARN/ID ---\nfunction detectProvider(arn) {\n  if (!arn) return 'unknown';\n  if (arn.startsWith('arn:aws:')) return 'aws';\n  if (arn.startsWith('arn:gcp:')) return 'gcp';\n  if (arn.startsWith('arn:azure:') || arn.startsWith('/subscriptions/')) return 'azure';\n  return 'unknown';\n}\n\n// --- Parse Wiz Finding ---\n// Example: Vulnerability Finding (CVE)\nif (finding.vulnerableAsset) {\n  alertType = finding.name || 'CVE';\n  alertDescription = finding.CVEDescription || finding.description || 'Vulnerability finding';\n  severity = finding.severity; // CRITICAL, HIGH, MEDIUM, LOW\n  const asset = finding.vulnerableAsset;\n\n  // Extract Resource Information\n  if (asset.providerUniqueId) {\n    resourceArn = asset.providerUniqueId;\n    provider = detectProvider(resourceArn);\n    \n    // Extract resourceId from ARN\n    const arnParts = resourceArn.split(':');\n    if (arnParts.length > 5) {\n      const resourcePart = arnParts[5];\n      const resourceParts = resourcePart.split('/');\n      resourceId = resourceParts[resourceParts.length - 1];\n      rawResourceId = resourceId;\n    }\n  }\n  \n  resourceType = asset.type || 'VIRTUAL_MACHINE';\n  region = asset.region;\n  accountId = asset.subscriptionExternalId;\n\n  // Determine containment based on severity\n  if (severity === 'CRITICAL' || severity === 'HIGH') {\n    needsContainment = true;\n  }\n}\n\n// --- Parse CSPM Finding (Network Exposure, Misconfiguration) ---\nelse if (finding.ruleName) {\n  alertType = finding.ruleName;\n  alertDescription = finding.remediationNotes || finding.description || 'CSPM finding';\n  severity = finding.severity;\n  accountId = finding.targetAccountIdentifier || finding.subscriptionId;\n  region = finding.targetRegion || finding.region;\n  resourceId = finding.targetResourceIdentifier || finding.resourceId;\n  rawResourceId = resourceId;\n  resourceType = finding.targetResourceSubtype || finding.resourceType || 'Resource';\n  \n  // Detect provider\n  if (finding.targetAccountType) {\n    provider = finding.targetAccountType.toLowerCase(); // aws, gcp, azure\n  } else if (finding.targetResourceIdentifier) {\n    provider = detectProvider(finding.targetResourceIdentifier);\n  }\n  \n  if (finding.result === 'FAIL' || finding.status === 'OPEN') {\n    needsContainment = true;\n  }\n}\n\n// --- Parse Malware Finding ---\nelse if (finding.malware) {\n  alertType = finding.malware.name || 'Malware Detected';\n  alertDescription = finding.malware.description || finding.description;\n  severity = finding.severity || 'CRITICAL';\n  \n  if (finding.resource) {\n    resourceArn = finding.resource.providerUniqueId;\n    provider = detectProvider(resourceArn);\n    resourceId = finding.resource.name || finding.resource.id;\n    rawResourceId = resourceId;\n    resourceType = finding.resource.type || 'Resource';\n    region = finding.resource.region;\n    accountId = finding.resource.subscriptionId;\n    needsContainment = true; // Malware always needs containment\n  }\n}\n\n// --- Fallback: Try to detect provider from any ARN-like field ---\nelse {\n  // Try to find an ARN in the finding\n  const arnKeys = ['arn', 'resourceArn', 'providerUniqueId', 'targetResourceIdentifier'];\n  for (const key of arnKeys) {\n    if (finding[key]) {\n      const potentialArn = finding[key];\n      provider = detectProvider(potentialArn);\n      if (provider !== 'unknown') {\n        resourceArn = potentialArn;\n        // Extract resourceId from ARN\n        const arnParts = potentialArn.split(':');\n        if (arnParts.length > 5) {\n          const resourcePart = arnParts[5];\n          const resourceParts = resourcePart.split('/');\n          resourceId = resourceParts[resourceParts.length - 1];\n          rawResourceId = resourceId;\n        }\n        break;\n      }\n    }\n  }\n  \n  // Try to get other fields\n  alertType = finding.type || finding.findingType || 'Security Finding';\n  alertDescription = finding.description || finding.message || 'Security alert from Wiz';\n  severity = finding.severity || finding.riskLevel || 'MEDIUM';\n  accountId = finding.accountId || finding.subscriptionId || finding.projectId;\n  region = finding.region || finding.location;\n  resourceType = finding.resourceType || finding.assetType || 'Resource';\n  \n  if (severity === 'CRITICAL' || severity === 'HIGH') {\n    needsContainment = true;\n  }\n}\n\n// --- Provider-specific Resource Type Normalization ---\n// For AWS\nif (provider === 'aws') {\n  if (resourceType === 'VIRTUAL_MACHINE' || resourceType === 'EC2Instance') {\n    resourceType = 'ec2-instance';\n  } else if (resourceType === 'S3Bucket') {\n    resourceType = 's3-bucket';\n  } else if (resourceType === 'IAMUser') {\n    resourceType = 'iam-user';\n  } else if (resourceType === 'IAMRole') {\n    resourceType = 'iam-role';\n  } else if (resourceType === 'LambdaFunction') {\n    resourceType = 'lambda-function';\n  } else if (resourceType === 'RDSInstance') {\n    resourceType = 'rds-instance';\n  }\n}\n\n// For GCP\nif (provider === 'gcp') {\n  if (resourceType === 'VIRTUAL_MACHINE' || resourceType === 'GCEInstance') {\n    resourceType = 'gce-instance';\n  } else if (resourceType === 'GCSBucket') {\n    resourceType = 'gcs-bucket';\n  } else if (resourceType === 'CloudFunction') {\n    resourceType = 'gcp-cloud-function';\n  } else if (resourceType === 'BigQueryDataset') {\n    resourceType = 'bigquery-dataset';\n  } else if (resourceType === 'CloudSQLInstance') {\n    resourceType = 'cloudsql-instance';\n  }\n}\n\n// For Azure\nif (provider === 'azure') {\n  if (resourceType === 'VIRTUAL_MACHINE' || resourceType === 'AzureVM') {\n    resourceType = 'azure-vm';\n  } else if (resourceType === 'StorageAccount') {\n    resourceType = 'azure-storage';\n  } else if (resourceType === 'FunctionApp') {\n    resourceType = 'azure-function';\n  } else if (resourceType === 'SQLDatabase') {\n    resourceType = 'azure-sql';\n  } else if (resourceType === 'KeyVault') {\n    resourceType = 'azure-keyvault';\n  }\n}\n\n// --- Prepare Output ---\nreturn [{\n  json: {\n    messageType: 'Notification',\n    provider: provider,\n    resourceType: resourceType,\n    resourceId: resourceId,\n    rawResourceId: rawResourceId,\n    resourceArn: resourceArn,\n    accountId: accountId,\n    region: region,\n    severity: severity,\n    needsContainment: needsContainment,\n    alertType: alertType,\n    alertDescription: alertDescription,\n    findingSource: findingSource,\n    finding: finding,\n    alertSummary: `[${findingSource}] ${alertType} on ${provider}:${resourceType} (${resourceId})`\n  }\n}];\n\n// Fallback\nreturn [{\n  json: {\n    messageType: 'Unknown',\n    data: finding\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -816,
+        400
+      ],
+      "id": "8c32719f-9a4c-41f3-bf6e-d5003c72cc16",
+      "name": "setting SNS and findings from WIZ"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Extract Provider\n// ============================================\nconst provider = data.provider || 'unknown';\n\n// ============================================\n// STEP 2: Map Resource Types to Function Names by Provider\n// ============================================\n\n// AWS Lambda function mappings\nconst awsFunctionMap = {\n  'ec2-instance': 'contain-ec2-instance',\n  's3-bucket': 'contain-s3-bucket',\n  'iam-user': 'contain-iam-user',\n  'iam-role': 'contain-iam-role',\n  'lambda-function': 'contain-lambda-function',\n  'rds-instance': 'contain-rds-instance',\n  'access-key': 'contain-access-key',\n  'sts-session': 'contain-sts-session'\n};\n\n// GCP Cloud Function mappings\nconst gcpFunctionMap = {\n  'gce-instance': 'contain-gce-instance',\n  'gcs-bucket': 'contain-gcs-bucket',\n  'gcp-cloud-function': 'contain-gcp-cloud-function',\n  'bigquery-dataset': 'contain-bigquery-dataset',\n  'cloudsql-instance': 'contain-cloudsql-instance'\n};\n\n// Azure Function mappings\nconst azureFunctionMap = {\n  'azure-vm': 'contain-azure-vm',\n  'azure-storage': 'contain-azure-storage',\n  'azure-function': 'contain-azure-function',\n  'azure-sql': 'contain-azure-sql',\n  'azure-keyvault': 'contain-azure-keyvault'\n};\n\n// ============================================\n// STEP 3: Build Provider-Specific Payloads\n// ============================================\n\nfunction buildAWSPayload(data) {\n  return {\n    targetResourceId: data.resourceId,\n    targetAccount: data.accountId,\n    targetRegion: data.region,\n    sirtID: data.sirtID || 'SIR-UNKNOWN',\n    severity: data.severity,\n    alertType: data.alertType,\n    alertDescription: data.alertDescription,\n    resourceType: data.resourceType,\n    // AWS-specific fields\n    arn: data.resourceArn,\n    rawResourceId: data.rawResourceId\n  };\n}\n\nfunction buildGCPPayload(data) {\n  return {\n    targetResourceId: data.resourceId,\n    targetProject: data.accountId, // GCP uses project ID\n    targetRegion: data.region,\n    targetZone: data.zone || data.region,\n    sirtID: data.sirtID || 'SIR-UNKNOWN',\n    severity: data.severity,\n    alertType: data.alertType,\n    alertDescription: data.alertDescription,\n    resourceType: data.resourceType,\n    // GCP-specific fields\n    resourceName: data.resourceArn || data.resourceId,\n    projectId: data.accountId\n  };\n}\n\nfunction buildAzurePayload(data) {\n  return {\n    targetResourceId: data.resourceId,\n    targetSubscription: data.accountId,\n    targetRegion: data.region,\n    targetResourceGroup: data.resourceGroup || 'unknown',\n    sirtID: data.sirtID || 'SIR-UNKNOWN',\n    severity: data.severity,\n    alertType: data.alertType,\n    alertDescription: data.alertDescription,\n    resourceType: data.resourceType,\n    // Azure-specific fields\n    resourceUri: data.resourceArn || data.resourceId,\n    subscriptionId: data.accountId\n  };\n}\n\n// ============================================\n// STEP 4: Determine Function Name\n// ============================================\nlet functionName = null;\nlet lambdaPayload = {};\n\nif (provider === 'aws') {\n  functionName = awsFunctionMap[data.resourceType] || 'contain-aws-unknown';\n  lambdaPayload = buildAWSPayload(data);\n} else if (provider === 'gcp') {\n  functionName = gcpFunctionMap[data.resourceType] || 'contain-gcp-unknown';\n  lambdaPayload = buildGCPPayload(data);\n} else if (provider === 'azure') {\n  functionName = azureFunctionMap[data.resourceType] || 'contain-azure-unknown';\n  lambdaPayload = buildAzurePayload(data);\n} else {\n  functionName = 'contain-unknown-provider';\n  lambdaPayload = {\n    provider: provider,\n    resourceType: data.resourceType,\n    resourceId: data.resourceId,\n    accountId: data.accountId,\n    region: data.region,\n    severity: data.severity,\n    alertType: data.alertType,\n    sirtID: data.sirtID || 'SIR-UNKNOWN'\n  };\n}\n\n// ============================================\n// STEP 5: Return Data\n// ============================================\nreturn [{\n  json: {\n    ...data,\n    provider: provider,\n    functionName: functionName,\n    lambdaPayload: lambdaPayload,\n    // For switch node routing\n    providerType: provider,\n    // Summary\n    lambdaSummary: `Invoking ${functionName} for ${provider}:${data.resourceType} (${data.resourceId})`\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -352,
+        224
+      ],
+      "id": "8c1b022a-70ce-48f1-a97f-c2854563ea04",
+      "name": "Build Payload, map with function names"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $json.region }}-{{ $json.projectId }}.cloudfunctions.net/{{ $json.functionName }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "value": "\tContent-Type: application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "={{ $json.lambdaPayload | json }}",
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        336,
+        -224
+      ],
+      "id": "622304d5-8190-4668-be60-d1eb3f968de6",
+      "name": "HTTP Request (GCP Cloud Function)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $json.functionAppName }}.azurewebsites.net/api/{{ $json.functionName }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-functions-key",
+              "value": " YOUR_AZURE_FUNCTION_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "={{ $json.lambdaPayload | json }}",
+              "value": "={{ $json.lambdaPayload | json }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        336,
+        -32
+      ],
+      "id": "68049f44-18c6-4318-ae6a-be7f39bc7ea4",
+      "name": "Azure Function (via HTTP Request)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the cloud function/Lambda node\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Extract Provider and Response\n// ============================================\nconst provider = data.provider || 'unknown';\nconst response = data.response || data.body || data;\n\n// ============================================\n// STEP 2: Initialize Variables\n// ============================================\nlet executionStatus = 'success';\nlet errorMessage = null;\nlet containmentDetails = {};\nlet parsedResponse = {};\nlet rawResponse = response;\n\n// ============================================\n// STEP 3: Parse Response Based on Provider\n// ============================================\n\n// 3a: AWS Lambda Response\nif (provider === 'aws') {\n  // AWS Lambda returns response in the body\n  if (response.body) {\n    try {\n      parsedResponse = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;\n    } catch (error) {\n      parsedResponse = { message: response.body };\n    }\n  } else {\n    parsedResponse = response;\n  }\n  \n  // Check for Lambda errors\n  if (response.FunctionError) {\n    executionStatus = 'failed';\n    errorMessage = response.FunctionError;\n  }\n}\n\n// 3b: GCP Cloud Function Response\nelse if (provider === 'gcp') {\n  // GCP Cloud Functions return response directly\n  if (response.body) {\n    try {\n      parsedResponse = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;\n    } catch (error) {\n      parsedResponse = { message: response.body };\n    }\n  } else {\n    parsedResponse = response;\n  }\n  \n  // Check for GCP errors\n  if (response.error || response.status === 'error') {\n    executionStatus = 'failed';\n    errorMessage = response.error || response.message || 'GCP Cloud Function error';\n  }\n}\n\n// 3c: Azure Function Response\nelse if (provider === 'azure') {\n  // Azure Functions return response directly\n  if (response.body) {\n    try {\n      parsedResponse = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;\n    } catch (error) {\n      parsedResponse = { message: response.body };\n    }\n  } else {\n    parsedResponse = response;\n  }\n  \n  // Check for Azure errors\n  if (response.statusCode && response.statusCode >= 400) {\n    executionStatus = 'failed';\n    errorMessage = 'Azure Function returned status code: ' + response.statusCode;\n  }\n}\n\n// 3d: Unknown Provider\nelse {\n  // Generic response parsing\n  if (response.body) {\n    try {\n      parsedResponse = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;\n    } catch (error) {\n      parsedResponse = { message: response.body };\n    }\n  } else {\n    parsedResponse = response;\n  }\n}\n\n// ============================================\n// STEP 4: Extract Containment Details\n// ============================================\nconst status = parsedResponse.status || parsedResponse.result || parsedResponse.outcome || 'unknown';\n\nif (status === 'success' || status === 'contained' || status === 'completed') {\n  executionStatus = 'success';\n  containmentDetails = {\n    action: parsedResponse.action || parsedResponse.operation || 'contained',\n    resourceId: parsedResponse.resourceId || parsedResponse.targetResourceId || data.resourceId,\n    resourceType: parsedResponse.resourceType || data.resourceType,\n    provider: provider,\n    details: parsedResponse.details || parsedResponse.actions || parsedResponse.messages || [],\n    timestamp: parsedResponse.timestamp || new Date().toISOString()\n  };\n} else if (status === 'failed' || status === 'error') {\n  executionStatus = 'failed';\n  errorMessage = parsedResponse.error || parsedResponse.message || parsedResponse.reason || 'Containment failed';\n  containmentDetails = {\n    action: parsedResponse.action || 'failed',\n    resourceId: parsedResponse.resourceId || data.resourceId,\n    resourceType: parsedResponse.resourceType || data.resourceType,\n    provider: provider,\n    details: parsedResponse.details || [],\n    timestamp: new Date().toISOString()\n  };\n}\n\n// ============================================\n// STEP 5: Check for Manual Intervention\n// ============================================\nlet needsManualIntervention = false;\nlet manualInterventionReason = '';\n\n// Check various fields that might indicate manual intervention\nif (parsedResponse.requiresManualIntervention || \n    parsedResponse.manualIntervention ||\n    parsedResponse.needsManualIntervention ||\n    parsedResponse.requiresHumanAction) {\n  needsManualIntervention = true;\n  manualInterventionReason = parsedResponse.manualInterventionReason || \n                            parsedResponse.reason || \n                            'Function indicates manual intervention required';\n}\n\n// Additional checks based on provider\nif (provider === 'aws' && parsedResponse.FunctionError) {\n  needsManualIntervention = true;\n  manualInterventionReason = 'AWS Lambda error: ' + parsedResponse.FunctionError;\n}\n\nif (provider === 'gcp' && parsedResponse.error) {\n  needsManualIntervention = true;\n  manualInterventionReason = 'GCP Cloud Function error: ' + parsedResponse.error;\n}\n\nif (provider === 'azure' && parsedResponse.error) {\n  needsManualIntervention = true;\n  manualInterventionReason = 'Azure Function error: ' + parsedResponse.error;\n}\n\n// ============================================\n// STEP 6: Extract Detailed Actions\n// ============================================\nlet actionDetails = [];\n\n// Try to extract detailed actions from various response formats\nif (parsedResponse.actions && Array.isArray(parsedResponse.actions)) {\n  actionDetails = parsedResponse.actions;\n} else if (parsedResponse.details && Array.isArray(parsedResponse.details)) {\n  actionDetails = parsedResponse.details;\n} else if (parsedResponse.steps && Array.isArray(parsedResponse.steps)) {\n  actionDetails = parsedResponse.steps;\n} else if (parsedResponse.results && Array.isArray(parsedResponse.results)) {\n  actionDetails = parsedResponse.results;\n} else if (parsedResponse.messages && Array.isArray(parsedResponse.messages)) {\n  actionDetails = parsedResponse.messages;\n}\n\n// If we have a single action string, convert to array\nif (typeof parsedResponse.action === 'string' && actionDetails.length === 0) {\n  actionDetails = [parsedResponse.action];\n}\n\n// ============================================\n// STEP 7: Build Summary\n// ============================================\nlet summary = '';\n\nif (executionStatus === 'success') {\n  summary = `✅ ${provider.toUpperCase()}/${data.resourceType} contained successfully`;\n  if (actionDetails.length > 0) {\n    summary += ' - ' + actionDetails.join(', ');\n  }\n} else {\n  summary = `❌ Failed to contain ${provider.toUpperCase()}/${data.resourceType}`;\n  if (errorMessage) {\n    summary += ': ' + errorMessage;\n  }\n  if (needsManualIntervention) {\n    summary += ' ⚠️ Manual intervention required!';\n  }\n}\n\n// ============================================\n// STEP 8: Build Slack Message\n// ============================================\nlet slackText = '🚨 **Security Alert - ' + provider.toUpperCase() + ' Containment Result**\\n\\n';\nslackText += '*SIR ID:* `' + (data.sirtID || 'SIR-UNKNOWN') + '`\\n';\nslackText += '*Provider:* ' + provider.toUpperCase() + '\\n';\nslackText += '*Status:* ' + (executionStatus === 'success' ? '✅ Success' : '❌ Failed') + '\\n';\nslackText += '*Summary:* ' + summary + '\\n\\n';\nslackText += '*Resource Details:*\\n';\nslackText += '• Type: ' + data.resourceType + '\\n';\nslackText += '• ID: `' + data.resourceId + '`\\n';\nslackText += '• Account/Project: ' + data.accountId + '\\n';\nslackText += '• Region: ' + data.region + '\\n';\nslackText += '• Severity: ' + data.severity + '\\n';\nslackText += '• Alert: ' + data.alertType + '\\n\\n';\nslackText += '*Function Details:*\\n';\nslackText += '• Function: `' + (data.functionName || 'unknown') + '`\\n';\nslackText += '• Timestamp: ' + new Date().toISOString() + '\\n\\n';\n\nif (actionDetails.length > 0) {\n  slackText += '*Containment Actions:*\\n';\n  for (let i = 0; i < actionDetails.length; i++) {\n    slackText += '• ' + actionDetails[i] + '\\n';\n  }\n  slackText += '\\n';\n}\n\nif (needsManualIntervention) {\n  slackText += '⚠️ **Manual Intervention Required!**\\n';\n  slackText += '*Reason:* ' + manualInterventionReason + '\\n\\n';\n}\n\nif (errorMessage) {\n  slackText += '*Error:* ' + errorMessage + '\\n\\n';\n}\n\n// Add provider-specific information\nif (provider === 'aws') {\n  slackText += '*AWS Details:*\\n';\n  slackText += '• Request ID: ' + (parsedResponse.RequestId || 'N/A') + '\\n';\n  slackText += '• Function ARN: ' + (parsedResponse.FunctionArn || 'N/A') + '\\n\\n';\n} else if (provider === 'gcp') {\n  slackText += '*GCP Details:*\\n';\n  slackText += '• Function Name: ' + (data.functionName || 'N/A') + '\\n';\n  slackText += '• Project ID: ' + (data.accountId || 'N/A') + '\\n\\n';\n} else if (provider === 'azure') {\n  slackText += '*Azure Details:*\\n';\n  slackText += '• Function App: ' + (data.functionAppName || 'N/A') + '\\n';\n  slackText += '• Subscription ID: ' + (data.accountId || 'N/A') + '\\n\\n';\n}\n\nslackText += '🔗 *Containment completed* - Please verify resource is contained.';\n\n// ============================================\n// STEP 9: Build Provider-Specific Logs\n// ============================================\nlet providerLog = {\n  provider: provider,\n  executionStatus: executionStatus,\n  functionName: data.functionName,\n  resourceId: data.resourceId,\n  resourceType: data.resourceType,\n  timestamp: new Date().toISOString()\n};\n\n// Add provider-specific fields\nif (provider === 'aws') {\n  providerLog.awsRequestId = parsedResponse.RequestId || 'N/A';\n  providerLog.awsFunctionArn = parsedResponse.FunctionArn || 'N/A';\n} else if (provider === 'gcp') {\n  providerLog.gcpFunctionName = data.functionName;\n  providerLog.gcpProjectId = data.accountId;\n} else if (provider === 'azure') {\n  providerLog.azureFunctionApp = data.functionAppName;\n  providerLog.azureSubscriptionId = data.accountId;\n}\n\n// ============================================\n// STEP 10: Return Data\n// ============================================\nreturn [{\n  json: {\n    // Original data (preserve for downstream nodes)\n    ...data,\n    \n    // Execution results\n    executionStatus: executionStatus,\n    errorMessage: errorMessage,\n    containmentDetails: containmentDetails,\n    actionDetails: actionDetails,\n    \n    // Manual intervention flags\n    needsManualIntervention: needsManualIntervention,\n    manualInterventionReason: manualInterventionReason,\n    \n    // Parsed response\n    parsedResponse: parsedResponse,\n    rawResponse: rawResponse,\n    \n    // Provider-specific logs\n    providerLog: providerLog,\n    \n    // Slack and summary\n    slackText: slackText,\n    summary: summary,\n    \n    // Timestamp\n    timestamp: new Date().toISOString(),\n    \n    // Status for IF nodes\n    status: executionStatus\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        -240
+      ],
+      "id": "6f15f289-6de1-496b-beb5-a6c467116c8f",
+      "name": "Process Response for providers"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "setting SNS and findings from WIZ",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Containment Action (IF Node)": {
+      "main": [
+        [
+          {
+            "node": "Build Payload, map with function names",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AWS SNS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AWS SNS1": {
+      "main": [
+        [
+          {
+            "node": "Code ( CloudWatch-Focused Logging)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code ( CloudWatch-Focused Logging)": {
+      "main": [
+        [
+          {
+            "node": "CloudWatch Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Get a search report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoke AWS Lambda": {
+      "main": [
+        [
+          {
+            "node": "Process Response for providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch(Providers)": {
+      "main": [
+        [
+          {
+            "node": "Invoke AWS Lambda",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HTTP Request (GCP Cloud Function)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Azure Function (via HTTP Request)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setting SNS and findings from WIZ": {
+      "main": [
+        [
+          {
+            "node": "Determine Containment Action (IF Node)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Payload, map with function names": {
+      "main": [
+        [
+          {
+            "node": "Switch(Providers)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request (GCP Cloud Function)": {
+      "main": [
+        [
+          {
+            "node": "Process Response for providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Azure Function (via HTTP Request)": {
+      "main": [
+        [
+          {
+            "node": "Process Response for providers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Response for providers": {
+      "main": [
+        [
+          {
+            "node": "AWS SNS1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "bec4ddae-5470-4f4f-b7f8-008b178b5775",
+  "meta": {
+    "instanceId": "b5abafdad1ab1678fa8081593bb5ae1c635d18ce6c1569f43018a8fead223659"
+  },
+  "nodeGroups": [],
+  "id": "3N31MCKP6cDeY5Mp",
+  "tags": []
+}
