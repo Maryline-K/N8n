@@ -1,0 +1,625 @@
+{
+  "name": "lambda-workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "2d5cafc5-e578-49af-84c0-9922e8ff5e3c",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -144,
+        0
+      ],
+      "id": "977b82aa-31af-48f7-8bc3-3c8ef14ee82c",
+      "name": "Webhook",
+      "webhookId": "2d5cafc5-e578-49af-84c0-9922e8ff5e3c",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the webhook\nconst data = $input.first().json;\n\n// Parse the body if it's a string\nlet snsData = data;\nif (typeof data.body === 'string') {\n  try {\n    snsData = JSON.parse(data.body);\n  } catch (error) {\n    // If parsing fails, use the raw data\n  }\n}\n\n// Handle subscription confirmation\nif (snsData.Type === 'SubscriptionConfirmation') {\n  return [{\n    json: {\n      messageType: 'SubscriptionConfirmation',\n      subscribeURL: snsData.SubscribeURL,\n      request: {\n        method: 'GET',\n        url: snsData.SubscribeURL\n      }\n    }\n  }];\n}\n\n// Process the actual notification (alert)\nif (snsData.Type === 'Notification') {\n  // Parse the Message field which contains the actual finding\n  let finding = snsData.Message;\n  if (typeof finding === 'string') {\n    try {\n      finding = JSON.parse(finding);\n    } catch (error) {\n      // If it's not JSON, use it as is\n    }\n  }\n  \n  // Initialize variables\n  let resourceId = null;\n  let resourceType = null;\n  let resourceArn = null;\n  let accountId = null;\n  let severity = null;\n  let alertType = null;\n  let alertDescription = null;\n  let region = 'us-east-1';\n  let findingSource = 'Unknown';\n  let iamUserName = null;\n  let roleName = null;\n  let functionName = null;\n  let accessKeyId = null;\n  let sessionId = null;\n  let additionalDetails = {};\n  \n  // --- Parse GuardDuty Finding ---\n  if (finding.detail && finding.detail.resource) {\n    findingSource = 'GuardDuty';\n    const resource = finding.detail.resource;\n    accountId = finding.account;\n    severity = finding.detail.severity;\n    alertType = finding.detail.type;\n    alertDescription = finding.detail.description || '';\n    region = finding.region || 'us-east-1';\n    \n    // EC2 Instance\n    if (resource.instanceDetails) {\n      resourceType = 'ec2-instance';\n      resourceId = resource.instanceDetails.instanceId;\n      resourceArn = resource.instanceDetails.instanceArn;\n      additionalDetails = {\n        instanceType: resource.instanceDetails.instanceType,\n        privateIp: resource.instanceDetails.privateIpAddress,\n        publicIp: resource.instanceDetails.publicIp\n      };\n    }\n    // S3 Bucket\n    else if (resource.s3BucketDetails) {\n      resourceType = 's3-bucket';\n      resourceId = resource.s3BucketDetails[0].bucketName;\n      resourceArn = 'arn:aws:s3:::' + resourceId;\n    }\n    // RDS Instance\n    else if (resource.rdsDbInstanceDetails) {\n      resourceType = 'rds-instance';\n      resourceId = resource.rdsDbInstanceDetails.dbInstanceIdentifier;\n      resourceArn = resource.rdsDbInstanceDetails.dbInstanceArn;\n    }\n    // IAM Role (GuardDuty can detect compromised roles)\n    else if (resource.roleDetails) {\n      resourceType = 'iam-role';\n      roleName = resource.roleDetails.roleName;\n      resourceId = roleName;\n      resourceArn = resource.roleDetails.arn;\n    }\n    // IAM User\n    else if (resource.userDetails) {\n      resourceType = 'iam-user';\n      iamUserName = resource.userDetails.userName;\n      resourceId = iamUserName;\n      resourceArn = resource.userDetails.arn;\n    }\n    // Lambda Function\n    else if (resource.lambdaFunctionDetails) {\n      resourceType = 'lambda-function';\n      functionName = resource.lambdaFunctionDetails.functionName;\n      resourceId = functionName;\n      resourceArn = resource.lambdaFunctionDetails.functionArn;\n      region = resource.lambdaFunctionDetails.functionRegion || region;\n    }\n    // Access Key (IAM User credentials)\n    else if (resource.accessKeyDetails) {\n      resourceType = 'access-key';\n      accessKeyId = resource.accessKeyDetails.accessKeyId;\n      resourceId = accessKeyId;\n      iamUserName = resource.accessKeyDetails.userName;\n      resourceArn = resource.accessKeyDetails.arn;\n    }\n  }\n  \n  // --- Parse Security Hub Finding ---\n  else if (finding.Resources && finding.Resources.length > 0) {\n    findingSource = 'SecurityHub';\n    accountId = finding.AwsAccountId;\n    severity = finding.Severity && finding.Severity.Normalized;\n    alertType = finding.Title;\n    alertDescription = finding.Description || '';\n    region = finding.Region || 'us-east-1';\n    \n    for (let i = 0; i < finding.Resources.length; i++) {\n      const res = finding.Resources[i];\n      if (res.Type === 'AwsEc2Instance') {\n        resourceType = 'ec2-instance';\n        resourceId = res.Id;\n        resourceArn = res.Arn;\n      } else if (res.Type === 'AwsS3Bucket') {\n        resourceType = 's3-bucket';\n        resourceId = res.Id;\n        resourceArn = 'arn:aws:s3:::' + res.Id;\n      } else if (res.Type === 'AwsIamUser') {\n        resourceType = 'iam-user';\n        iamUserName = res.Id;\n        resourceId = iamUserName;\n        resourceArn = res.Arn;\n      } else if (res.Type === 'AwsIamRole') {\n        resourceType = 'iam-role';\n        roleName = res.Id;\n        resourceId = roleName;\n        resourceArn = res.Arn;\n      } else if (res.Type === 'AwsRdsDbInstance') {\n        resourceType = 'rds-instance';\n        resourceId = res.Id;\n        resourceArn = res.Arn;\n      } else if (res.Type === 'AwsLambdaFunction') {\n        resourceType = 'lambda-function';\n        functionName = res.Id;\n        resourceId = functionName;\n        resourceArn = res.Arn;\n      }\n    }\n  }\n  \n  // --- Parse AWS Config Compliance Change ---\n  else if (finding.configurationItem) {\n    findingSource = 'Config';\n    const config = finding.configurationItem;\n    resourceType = config.resourceType ? config.resourceType.toLowerCase().replace('aws::', '') : null;\n    resourceId = config.resourceId;\n    resourceArn = config.arn;\n    accountId = config.awsAccountId;\n    alertType = 'Config Compliance Change';\n    alertDescription = 'Resource ' + resourceId + ' is non-compliant';\n    region = config.awsRegion || 'us-east-1';\n    \n    // Map Config resource types to our standard types\n    if (resourceType === 'ec2::instance') {\n      resourceType = 'ec2-instance';\n    } else if (resourceType === 's3::bucket') {\n      resourceType = 's3-bucket';\n    } else if (resourceType === 'iam::user') {\n      resourceType = 'iam-user';\n    } else if (resourceType === 'iam::role') {\n      resourceType = 'iam-role';\n    } else if (resourceType === 'lambda::function') {\n      resourceType = 'lambda-function';\n    } else if (resourceType === 'iam::accesskey') {\n      resourceType = 'access-key';\n    }\n  }\n  \n  // --- Parse STS Temporary Credential Events ---\n  // Check for STS-related findings in the alert\n  if (finding.detail && finding.detail.sessionIssuer) {\n    const session = finding.detail.sessionIssuer;\n    if (session.userName && session.userType) {\n      resourceType = 'sts-session';\n      iamUserName = session.userName;\n      resourceId = session.sessionId || session.userName;\n      resourceArn = session.arn;\n      sessionId = session.sessionId;\n      additionalDetails.sessionDetails = {\n        sessionId: sessionId,\n        principalId: session.principalId,\n        type: session.userType\n      };\n    }\n  }\n  \n  // Check for temporary credentials in the finding\n  if (finding.detail && finding.detail.awsCredentials) {\n    const creds = finding.detail.awsCredentials;\n    accessKeyId = creds.accessKeyId;\n    additionalDetails.credentials = {\n      accessKeyId: accessKeyId,\n      expiration: creds.expiration,\n      sessionToken: creds.sessionToken ? '[REDACTED]' : null\n    };\n    // If this is an STS session, mark it\n    if (resourceType === 'sts-session' || !resourceType) {\n      resourceType = 'sts-temp-credentials';\n    }\n  }\n  \n  // Determine if containment is needed based on severity and type\n  let needsContainment = false;\n  let containmentReason = '';\n  \n  if (severity) {\n    if (severity >= 7) { // GuardDuty\n      needsContainment = true;\n      containmentReason = 'High severity alert (GuardDuty severity: ' + severity + ')';\n    } else if (severity >= 70) { // Security Hub\n      needsContainment = true;\n      containmentReason = 'High severity alert (Security Hub severity: ' + severity + ')';\n    }\n  }\n  \n  // If no severity but we have a finding, still contain if it's a critical alert type\n  if (!needsContainment && alertType) {\n    const criticalTypes = ['UnauthorizedAccess', 'Compromised', 'Malicious', 'Breach', 'Attack', 'Anomaly', 'Suspicious'];\n    for (let i = 0; i < criticalTypes.length; i++) {\n      if (alertType.indexOf(criticalTypes[i]) !== -1) {\n        needsContainment = true;\n        containmentReason = 'Critical alert type: ' + alertType;\n        break;\n      }\n    }\n  }\n  \n  // Prepare output for the workflow\n  return [{\n    json: {\n      messageType: 'Notification',\n      resourceType: resourceType,\n      resourceId: resourceId,\n      resourceArn: resourceArn,\n      accountId: accountId,\n      severity: severity,\n      needsContainment: needsContainment,\n      containmentReason: containmentReason,\n      alertType: alertType,\n      alertDescription: alertDescription,\n      region: region,\n      findingSource: findingSource,\n      iamUserName: iamUserName,\n      roleName: roleName,\n      functionName: functionName,\n      accessKeyId: accessKeyId,\n      sessionId: sessionId,\n      additionalDetails: additionalDetails,\n      finding: finding,\n      originalMessage: snsData.Message,\n      alertSummary: '[ALERT] ' + findingSource + ' - ' + alertType + ' on ' + resourceType + ' (' + resourceId + ')'\n    }\n  }];\n}\n\n// Fallback for unknown message types\nreturn [{\n  json: {\n    messageType: 'Unknown',\n    data: snsData\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        48,
+        0
+      ],
+      "id": "6a1e0654-dee4-444f-9213-6ebdbd9cd908",
+      "name": "Code (setting up sns subscription)"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "ec2-instance",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "bd8a7f4c-e11a-4fbc-8751-fdf9df72e14c"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "3cafd37a-3fa5-4cd9-97b2-1b44b656fdda",
+                    "leftValue": "=\t{{ $json.resourceType }}",
+                    "rightValue": "s3-bucket",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "7f0d734b-5686-4fac-9175-07c513422594",
+                    "leftValue": "=\t{{ $json.resourceType }}",
+                    "rightValue": "iam-user",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "d6228e39-a879-42f1-8633-ead16cd713d7",
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "iam-role",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "14b7154d-9470-4a93-8a82-67a035e8bf1a",
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "lambda-function",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "047b7999-d03c-4a60-8945-9f57d4ea1134",
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "rds-instance",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a698c8a9-39d1-44a5-afbd-39134e57fc45",
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "access-key",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "486656e7-aa6b-4609-8872-3b383c3042d4",
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "sts-session",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "f2e329b6-d6ec-48fa-b8d6-050e69162ffe",
+                    "leftValue": "={{ $json.resourceType }}",
+                    "rightValue": "sts-temp-credentials",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {
+          "ignoreCase": false,
+          "allMatchingOutputs": false
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1440,
+        144
+      ],
+      "id": "5fa6c717-1380-4a2a-8405-fa31ce2824a6",
+      "name": "Switch(Actions by Resource Type)",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "435c6103-9f99-4bc9-8463-52e332afcad4",
+              "leftValue": "={{ $json.needsContainment }}",
+              "rightValue": "={{ $json.resourceType }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "3bd46182-95f9-45aa-aa20-7b4d10b1d95d",
+              "leftValue": "=\t{{ $json.resourceType }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        272,
+        0
+      ],
+      "id": "187d820b-9bcc-4c32-81d7-1b582876a059",
+      "name": "Determine Containment Action (IF Node)"
+    },
+    {
+      "parameters": {
+        "topic": {
+          "__rl": true,
+          "value": "arn:aws:sns:us-east-1:add-your-account-id-here:test-topic",
+          "mode": "list",
+          "cachedResultName": "test-topic",
+          "cachedResultUrl": "https://us-east-1.console.aws.amazon.com/sns/v3/home?region=us-east-1#/topic/arn:aws:sns:us-east-1:add-your-account-id-here:test-topic"
+        },
+        "subject": "={{ 'Security Alert: ' + $json.sirtID + ' - ' + $json.resourceType }}",
+        "message": "={{ 'Security Alert: ' + $json.sirtID + ' - ' + $json.resourceType }}"
+      },
+      "type": "n8n-nodes-base.awsSns",
+      "typeVersion": 1,
+      "position": [
+        560,
+        144
+      ],
+      "id": "8b52114a-1cb7-4d7b-8b2a-b18dfbc805da",
+      "name": "AWS SNS",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the AWS Lambda node\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Extract Lambda Response\n// ============================================\nconst lambdaResponse = data.response || data.body || data;\n\n// Determine if Lambda execution was successful\nlet executionStatus = 'success';\nlet errorMessage = null;\nlet containmentDetails = {};\n\n// Check for errors in Lambda response\nif (lambdaResponse.errorMessage || lambdaResponse.error) {\n  executionStatus = 'failed';\n  errorMessage = lambdaResponse.errorMessage || lambdaResponse.error || 'Unknown error';\n} else if (lambdaResponse.statusCode && lambdaResponse.statusCode >= 400) {\n  executionStatus = 'failed';\n  errorMessage = 'Lambda returned status code: ' + lambdaResponse.statusCode;\n} else if (lambdaResponse.status && lambdaResponse.status === 'failed') {\n  executionStatus = 'failed';\n  errorMessage = lambdaResponse.reason || 'Lambda execution failed';\n}\n\n// ============================================\n// STEP 2: Parse Lambda Response Body (if JSON)\n// ============================================\nlet parsedResponse = lambdaResponse;\nif (typeof lambdaResponse.body === 'string') {\n  try {\n    parsedResponse = JSON.parse(lambdaResponse.body);\n  } catch (error) {\n    // If response body is not JSON, keep it as string\n    parsedResponse = { message: lambdaResponse.body };\n  }\n}\n\n// Extract containment details from the response\nif (parsedResponse.status === 'success' || parsedResponse.status === 'contained') {\n  containmentDetails = {\n    action: parsedResponse.action || 'contained',\n    resourceId: parsedResponse.resourceId || data.resourceId,\n    resourceType: parsedResponse.resourceType || data.resourceType,\n    details: parsedResponse.details || [],\n    timestamp: parsedResponse.timestamp || new Date().toISOString()\n  };\n} else if (parsedResponse.details) {\n  containmentDetails = {\n    action: parsedResponse.action || 'contained',\n    details: parsedResponse.details,\n    timestamp: parsedResponse.timestamp || new Date().toISOString()\n  };\n}\n\n// ============================================\n// STEP 3: Determine Next Actions\n// ============================================\nlet needsManualIntervention = false;\nlet manualInterventionReason = '';\n\n// Check if Lambda indicates manual intervention needed\nif (parsedResponse.requiresManualIntervention || parsedResponse.manualIntervention) {\n  needsManualIntervention = true;\n  manualInterventionReason = parsedResponse.manualInterventionReason || 'Lambda indicates manual intervention required';\n}\n\n// Check for specific resource types that might need additional actions\nif (data.resourceType === 'ec2-instance' && executionStatus === 'success') {\n  // EC2 containment might need additional verification\n  if (!parsedResponse.quarantineGroupApplied) {\n    needsManualIntervention = true;\n    manualInterventionReason = 'EC2 quarantine group may not have been applied';\n  }\n}\n\nif (data.resourceType === 's3-bucket' && executionStatus === 'success') {\n  // S3 containment might need additional verification\n  if (!parsedResponse.publicAccessBlocked) {\n    needsManualIntervention = true;\n    manualInterventionReason = 'S3 public access may not have been blocked';\n  }\n}\n\n// ============================================\n// STEP 4: Build Human-Readable Summary\n// ============================================\nlet summary = '';\nif (executionStatus === 'success') {\n  summary = '✅ ' + data.resourceType + ' contained successfully';\n  if (containmentDetails.details && containmentDetails.details.length > 0) {\n    summary += ' - ' + containmentDetails.details.join(', ');\n  }\n} else {\n  summary = '❌ Failed to contain ' + data.resourceType + ': ' + errorMessage;\n  if (needsManualIntervention) {\n    summary += ' ⚠️ Manual intervention required!';\n  }\n}\n\n// ============================================\n// STEP 5: Build Slack Message Fields\n// ============================================\nconst slackMessage = {\n  status: executionStatus,\n  summary: summary,\n  resourceType: data.resourceType,\n  resourceId: data.resourceId,\n  sirtID: data.sirtID || 'SIR-UNKNOWN',\n  functionName: data.functionName || 'unknown',\n  severity: data.severity || 'N/A',\n  alertType: data.alertType || 'Unknown',\n  accountId: data.accountId || 'N/A',\n  region: data.region || 'us-east-1',\n  containmentDetails: containmentDetails,\n  needsManualIntervention: needsManualIntervention,\n  manualInterventionReason: manualInterventionReason,\n  errorMessage: errorMessage,\n  timestamp: new Date().toISOString(),\n  // Raw data for debugging\n  lambdaResponse: lambdaResponse,\n  parsedResponse: parsedResponse\n};\n\n// ============================================\n// STEP 6: Build Slack Notification Text\n// ============================================\nlet slackText = '🚨 **AWS Security - Lambda Containment Result**\\n\\n';\nslackText += '*SIR ID:* `' + slackMessage.sirtID + '`\\n';\nslackText += '*Status:* ' + (executionStatus === 'success' ? '✅ Success' : '❌ Failed') + '\\n';\nslackText += '*Summary:* ' + summary + '\\n\\n';\n\nslackText += '*Resource Details:*\\n';\nslackText += '• Type: ' + slackMessage.resourceType + '\\n';\nslackText += '• ID: `' + slackMessage.resourceId + '`\\n';\nslackText += '• Account: ' + slackMessage.accountId + '\\n';\nslackText += '• Region: ' + slackMessage.region + '\\n';\nslackText += '• Severity: ' + slackMessage.severity + '\\n';\nslackText += '• Alert: ' + slackMessage.alertType + '\\n\\n';\n\nslackText += '*Lambda Details:*\\n';\nslackText += '• Function: `' + slackMessage.functionName + '`\\n';\nslackText += '• Timestamp: ' + slackMessage.timestamp + '\\n\\n';\n\nif (containmentDetails.details && containmentDetails.details.length > 0) {\n  slackText += '*Containment Actions:*\\n';\n  for (let i = 0; i < containmentDetails.details.length; i++) {\n    slackText += '• ' + containmentDetails.details[i] + '\\n';\n  }\n  slackText += '\\n';\n}\n\nif (needsManualIntervention) {\n  slackText += '⚠️ **Manual Intervention Required!**\\n';\n  slackText += '*Reason:* ' + manualInterventionReason + '\\n\\n';\n}\n\nif (errorMessage) {\n  slackText += '*Error:* ' + errorMessage + '\\n\\n';\n}\n\nslackText += '🔗 *Containment completed* - Please verify resource is contained.';\n\n// ============================================\n// STEP 7: Prepare Output\n// ============================================\nreturn [{\n  json: {\n    // Original data\n    resourceType: data.resourceType,\n    resourceId: data.resourceId,\n    accountId: data.accountId,\n    region: data.region,\n    severity: data.severity,\n    alertType: data.alertType,\n    alertDescription: data.alertDescription,\n    sirtID: data.sirtID || 'SIR-UNKNOWN',\n    functionName: data.functionName,\n    \n    // Lambda execution results\n    executionStatus: executionStatus,\n    errorMessage: errorMessage,\n    lambdaResponse: lambdaResponse,\n    parsedResponse: parsedResponse,\n    \n    // Containment details\n    containmentDetails: containmentDetails,\n    needsManualIntervention: needsManualIntervention,\n    manualInterventionReason: manualInterventionReason,\n    \n    // Slack message\n    slackText: slackText,\n    slackMessage: slackMessage,\n    \n    // Summary for logging\n    summary: summary,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        -288
+      ],
+      "id": "a0e7ef63-83cf-40f1-8064-754dcab89bac",
+      "name": "Code (Process Lambda Response)"
+    },
+    {
+      "parameters": {
+        "topic": {
+          "__rl": true,
+          "value": "arn:aws:sns:us-east-1:add-your-account-id-here:test-topic",
+          "mode": "list",
+          "cachedResultName": "test-topic",
+          "cachedResultUrl": "https://us-east-1.console.aws.amazon.com/sns/v3/home?region=us-east-1#/topic/arn:aws:sns:us-east-1:add-your-account-id-here:test-topic"
+        },
+        "subject": "={{ 'Security Alert: ' + $json.sirtID + ' - ' + $json.resourceType }}",
+        "message": "={{ 'Security Alert: ' + $json.sirtID + ' - ' + $json.resourceType }}"
+      },
+      "type": "n8n-nodes-base.awsSns",
+      "typeVersion": 1,
+      "position": [
+        1168,
+        -176
+      ],
+      "id": "a42a2a69-62e9-4f25-945b-411fe7ca4d58",
+      "name": "AWS SNS1",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the previous node\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Build Comprehensive Log Entry\n// ============================================\nconst logEntry = {\n  // Workflow metadata\n  workflowName: 'aws-security-containment',\n  workflowVersion: '1.0.0',\n  timestamp: new Date().toISOString(),\n  executionId: data.executionId || 'unknown',\n  \n  // Alert details\n  sirtID: data.sirtID || 'SIR-UNKNOWN',\n  alertType: data.alertType || 'Unknown',\n  alertDescription: data.alertDescription || '',\n  alertSource: data.findingSource || 'GuardDuty',\n  severity: data.severity || 0,\n  \n  // Resource details\n  resourceType: data.resourceType || 'unknown',\n  resourceId: data.resourceId || 'unknown',\n  resourceArn: data.resourceArn || '',\n  accountId: data.accountId || 'unknown',\n  region: data.region || 'us-east-1',\n  \n  // Lambda execution\n  lambdaFunction: data.functionName || 'unknown',\n  lambdaPayload: data.lambdaPayload || {},\n  lambdaResponse: data.lambdaResponse || {},\n  lambdaParsedResponse: data.parsedResponse || {},\n  \n  // Containment details\n  containmentStatus: data.executionStatus || 'unknown',\n  containmentActions: data.containmentDetails?.details || [],\n  needsManualIntervention: data.needsManualIntervention || false,\n  manualInterventionReason: data.manualInterventionReason || '',\n  \n  // Error handling\n  errorMessage: data.errorMessage || null,\n  \n  // Summary\n  summary: data.summary || 'No summary available',\n  \n  // Additional metadata\n  slackText: data.slackText || '',\n  tags: ['security', 'containment', 'automated-response']\n};\n\n// ============================================\n// STEP 2: Build CloudWatch Log Formats\n// ============================================\n\n// 2a: JSON Log (structured for CloudWatch)\nconst jsonLog = JSON.stringify(logEntry);\n\n// 2b: Human-Readable Log (for CloudWatch console)\nlet humanReadableLog = '========================================\\n';\nhumanReadableLog += 'AWS SECURITY - CONTAINMENT LOG\\n';\nhumanReadableLog += '========================================\\n\\n';\nhumanReadableLog += 'Timestamp: ' + logEntry.timestamp + '\\n';\nhumanReadableLog += 'SIR ID: ' + logEntry.sirtID + '\\n';\nhumanReadableLog += 'Execution ID: ' + logEntry.executionId + '\\n\\n';\n\nhumanReadableLog += '--- ALERT DETAILS ---\\n';\nhumanReadableLog += 'Type: ' + logEntry.alertType + '\\n';\nhumanReadableLog += 'Source: ' + logEntry.alertSource + '\\n';\nhumanReadableLog += 'Severity: ' + logEntry.severity + '\\n';\nhumanReadableLog += 'Description: ' + logEntry.alertDescription + '\\n\\n';\n\nhumanReadableLog += '--- RESOURCE DETAILS ---\\n';\nhumanReadableLog += 'Type: ' + logEntry.resourceType + '\\n';\nhumanReadableLog += 'ID: ' + logEntry.resourceId + '\\n';\nhumanReadableLog += 'Account: ' + logEntry.accountId + '\\n';\nhumanReadableLog += 'Region: ' + logEntry.region + '\\n\\n';\n\nhumanReadableLog += '--- CONTAINMENT ---\\n';\nhumanReadableLog += 'Status: ' + logEntry.containmentStatus + '\\n';\nhumanReadableLog += 'Lambda: ' + logEntry.lambdaFunction + '\\n';\nif (logEntry.containmentActions.length > 0) {\n  humanReadableLog += 'Actions:\\n';\n  for (let i = 0; i < logEntry.containmentActions.length; i++) {\n    humanReadableLog += '  - ' + logEntry.containmentActions[i] + '\\n';\n  }\n}\nhumanReadableLog += '\\n';\n\nif (logEntry.needsManualIntervention) {\n  humanReadableLog += '⚠️ MANUAL INTERVENTION REQUIRED!\\n';\n  humanReadableLog += 'Reason: ' + logEntry.manualInterventionReason + '\\n\\n';\n}\n\nif (logEntry.errorMessage) {\n  humanReadableLog += '❌ ERROR:\\n';\n  humanReadableLog += logEntry.errorMessage + '\\n\\n';\n}\n\nhumanReadableLog += 'Summary: ' + logEntry.summary + '\\n';\nhumanReadableLog += '========================================\\n';\n\n// ============================================\n// STEP 3: Prepare CloudWatch Log Events\n// ============================================\nconst timestamp = Date.now();\n\n// 3a: Single log event (JSON)\nconst cloudwatchJsonEvent = {\n  logGroupName: '/aws/security/containment',\n  logStreamName: logEntry.region + '/' + logEntry.accountId,\n  logEvents: [{\n    timestamp: timestamp,\n    message: jsonLog\n  }]\n};\n\n// 3b: Multiple log events (JSON + Human-readable)\nconst cloudwatchEvents = {\n  logGroupName: '/aws/security/containment',\n  logStreamName: logEntry.region + '/' + logEntry.accountId,\n  logEvents: [\n    {\n      timestamp: timestamp,\n      message: jsonLog\n    },\n    {\n      timestamp: timestamp + 1,\n      message: humanReadableLog\n    }\n  ]\n};\n\n// 3c: With severity-based filtering (for CloudWatch Insights)\nconst cloudwatchStructuredLog = {\n  logGroupName: '/aws/security/containment',\n  logStreamName: logEntry.region + '/' + logEntry.accountId,\n  logEvents: [{\n    timestamp: timestamp,\n    message: JSON.stringify({\n      ...logEntry,\n      // Add severity level for CloudWatch Logs Insights\n      logLevel: logEntry.severity >= 7 ? 'HIGH' : \n                logEntry.severity >= 4 ? 'MEDIUM' : 'LOW',\n      status: logEntry.containmentStatus,\n      // Add for easier querying\n      '@timestamp': logEntry.timestamp,\n      '@message': jsonLog\n    })\n  }]\n};\n\n// ============================================\n// STEP 4: Return Data for CloudWatch Upload\n// ============================================\nreturn [{\n  json: {\n    // Original data\n    ...data,\n    \n    // Log entries\n    logEntry: logEntry,\n    jsonLog: jsonLog,\n    humanReadableLog: humanReadableLog,\n    \n    // CloudWatch configurations\n    cloudwatch: {\n      logGroupName: '/aws/security/containment',\n      logStreamName: logEntry.region + '/' + logEntry.accountId,\n      region: logEntry.region,\n      accountId: logEntry.accountId\n    },\n    \n    // CloudWatch log events (choose one)\n    cloudwatchJsonEvent: cloudwatchJsonEvent,\n    cloudwatchEvents: cloudwatchEvents,\n    cloudwatchStructuredLog: cloudwatchStructuredLog,\n    \n    // For individual log event (AWS CloudWatch Logs node)\n    logGroupName: '/aws/security/containment',\n    logStreamName: logEntry.region + '/' + logEntry.accountId,\n    logEvent: {\n      timestamp: timestamp,\n      message: jsonLog\n    },\n    \n    // Status\n    logged: true,\n    logTimestamp: logEntry.timestamp,\n    logSummary: 'Logged containment for ' + logEntry.sirtID + ' (' + logEntry.resourceId + ')'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        -176
+      ],
+      "id": "1dbc3eb2-c700-4ace-a3f7-0e7b99daccc1",
+      "name": "Code ( CloudWatch-Focused Logging)"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=\thttps://logs.{{ $json.region }}.amazonaws.com/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Headers",
+              "value": "=Content-Type: application/x-amz-json-1.1"
+            },
+            {
+              "name": "Headers",
+              "value": "X-Amz-Target: Logs_20140328.PutLogEvents"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "Body",
+              "value": "={{ $json.cloudwatchEvents | json }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1664,
+        -176
+      ],
+      "id": "20aa6b86-4868-4638-b136-960dbf5002b8",
+      "name": "CloudWatch Post",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data from the previous node\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Build Comprehensive Log Entry\n// ============================================\nconst logEntry = {\n  // Workflow metadata\n  workflowName: 'aws-security-containment',\n  workflowVersion: '1.0.0',\n  timestamp: new Date().toISOString(),\n  executionId: data.executionId || 'unknown',\n  \n  // Alert details\n  sirtID: data.sirtID || 'SIR-UNKNOWN',\n  alertType: data.alertType || 'Unknown',\n  alertDescription: data.alertDescription || '',\n  alertSource: data.findingSource || 'GuardDuty',\n  severity: data.severity || 0,\n  \n  // Resource details\n  resourceType: data.resourceType || 'unknown',\n  resourceId: data.resourceId || 'unknown',\n  resourceArn: data.resourceArn || '',\n  accountId: data.accountId || 'unknown',\n  region: data.region || 'us-east-1',\n  \n  // Lambda execution\n  lambdaFunction: data.functionName || 'unknown',\n  lambdaPayload: data.lambdaPayload || {},\n  lambdaResponse: data.lambdaResponse || {},\n  lambdaParsedResponse: data.parsedResponse || {},\n  \n  // Containment details\n  containmentStatus: data.executionStatus || 'unknown',\n  containmentActions: data.containmentDetails?.details || [],\n  needsManualIntervention: data.needsManualIntervention || false,\n  manualInterventionReason: data.manualInterventionReason || '',\n  \n  // Error handling\n  errorMessage: data.errorMessage || null,\n  \n  // Summary\n  summary: data.summary || 'No summary available',\n  \n  // Additional metadata\n  slackText: data.slackText || '',\n  tags: ['security', 'containment', 'automated-response']\n};\n\n// ============================================\n// STEP 2: Build Splunk Log Formats\n// ============================================\n\n// 2a: Single event (for Splunk HEC)\nconst splunkSingleEvent = {\n  event: logEntry,\n  sourcetype: 'aws-security-containment',\n  index: 'security',\n  source: 'n8n-workflow',\n  host: 'aws-containment-automation'\n};\n\n// 2b: Multiple events (batch mode)\nconst splunkBatchEvents = {\n  events: [\n    {\n      event: logEntry,\n      sourcetype: 'aws-security-containment',\n      index: 'security',\n      source: 'n8n-workflow',\n      host: 'aws-containment-automation'\n    }\n  ]\n};\n\n// 2c: Raw data format (for non-JSON endpoints)\nconst splunkRawEvent = {\n  event: JSON.stringify(logEntry),\n  sourcetype: 'json',\n  index: 'security'\n};\n\n// 2d: With custom metadata (for Splunk search optimization)\nconst splunkEnhancedEvent = {\n  event: {\n    ...logEntry,\n    // Add Splunk-optimized fields\n    severity_level: logEntry.severity >= 7 ? 'critical' : \n                     logEntry.severity >= 4 ? 'high' : 'medium',\n    resource_category: logEntry.resourceType,\n    containment_required: logEntry.needsManualIntervention ? 'yes' : 'no',\n    execution_time: new Date().toISOString()\n  },\n  sourcetype: 'aws-security-containment',\n  index: 'security',\n  source: 'n8n-workflow',\n  host: 'aws-containment-automation'\n};\n\n// ============================================\n// STEP 3: Build Splunk-Friendly Log Formats\n// ============================================\n\n// 3a: JSON for Splunk (structured)\nconst splunkJsonLog = JSON.stringify(logEntry);\n\n// 3b: Human-readable for Splunk (for free text search)\nlet splunkHumanReadable = 'TIMESTAMP=' + logEntry.timestamp + ' ';\nsplunkHumanReadable += 'SIR_ID=' + logEntry.sirtID + ' ';\nsplunkHumanReadable += 'RESOURCE_TYPE=' + logEntry.resourceType + ' ';\nsplunkHumanReadable += 'RESOURCE_ID=' + logEntry.resourceId + ' ';\nsplunkHumanReadable += 'ACCOUNT=' + logEntry.accountId + ' ';\nsplunkHumanReadable += 'REGION=' + logEntry.region + ' ';\nsplunkHumanReadable += 'SEVERITY=' + logEntry.severity + ' ';\nsplunkHumanReadable += 'STATUS=' + logEntry.containmentStatus + ' ';\nsplunkHumanReadable += 'LAMBDA=' + logEntry.lambdaFunction + ' ';\nif (logEntry.errorMessage) {\n  splunkHumanReadable += 'ERROR=' + logEntry.errorMessage + ' ';\n}\nsplunkHumanReadable += 'SUMMARY=' + logEntry.summary;\n\n// 3c: Key-Value format (Splunk default)\nlet splunkKeyValue = '';\nfor (const [key, value] of Object.entries(logEntry)) {\n  if (value !== null && value !== undefined) {\n    if (typeof value === 'object') {\n      splunkKeyValue += key + '=' + JSON.stringify(value) + ' ';\n    } else {\n      splunkKeyValue += key + '=' + value + ' ';\n    }\n  }\n}\n\n// ============================================\n// STEP 4: Prepare Splunk HEC Configurations\n// ============================================\n\n// Splunk HEC configuration (for HTTP Request node)\nconst splunkConfig = {\n  endpoint: 'https://your-splunk-instance:8088/services/collector',\n  authHeader: 'Splunk YOUR_HEC_TOKEN', // Replace with your actual token\n  headers: {\n    'Authorization': 'Splunk YOUR_HEC_TOKEN',\n    'Content-Type': 'application/json'\n  },\n  // Use one of the event formats above\n  body: splunkSingleEvent\n};\n\n// ============================================\n// STEP 5: Return Data for Splunk Upload\n// ============================================\nreturn [{\n  json: {\n    // Original data\n    ...data,\n    \n    // Log entries\n    logEntry: logEntry,\n    splunkJsonLog: splunkJsonLog,\n    splunkHumanReadable: splunkHumanReadable,\n    splunkKeyValue: splunkKeyValue,\n    \n    // Splunk event formats\n    splunkSingleEvent: splunkSingleEvent,\n    splunkBatchEvents: splunkBatchEvents,\n    splunkEnhancedEvent: splunkEnhancedEvent,\n    \n    // Splunk configuration\n    splunkConfig: splunkConfig,\n    splunkEndpoint: 'https://your-splunk-instance:8088/services/collector',\n    splunkAuthHeader: 'Splunk YOUR_HEC_TOKEN',\n    \n    // For quick copy-paste\n    splunkRawBody: JSON.stringify(splunkSingleEvent),\n    \n    // Status\n    logged: true,\n    logTimestamp: logEntry.timestamp,\n    logSummary: 'Logged containment for ' + logEntry.sirtID + ' (' + logEntry.resourceId + ')'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        272
+      ],
+      "id": "034e095f-618d-481f-ac21-601a3501365e",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "resource": "report",
+        "operation": "get",
+        "reportId": {
+          "__rl": true,
+          "value": "={{ $json.splunkMessage }}",
+          "mode": "id"
+        }
+      },
+      "type": "n8n-nodes-base.splunk",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        240
+      ],
+      "id": "6f426f88-98b2-4000-b693-da4eef623f4c",
+      "name": "Get a search report",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "function": "={{ $json.functionName }}",
+        "payload": "= {{ $json.lambdaPayload }}"
+      },
+      "type": "n8n-nodes-base.awsLambda",
+      "typeVersion": 1,
+      "position": [
+        688,
+        -304
+      ],
+      "id": "1901a6da-4bed-405f-9bcf-857f140e66ba",
+      "name": "Invoke AWS Lambda",
+      "credentials": {
+        "aws": {
+          "id": "SrjHTb6dXyAdx1wM",
+          "name": "AWS (IAM) account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the incoming data\nconst data = $input.first().json;\n\n// ============================================\n// STEP 1: Extract SIR ID from GuardDuty Finding\n// ============================================\nlet sirtID = 'SIR-UNKNOWN';\n\n// Option 1: Use alert type as fallback\nsirtID = data.alertType || 'SIR-UNKNOWN';\n\n// Option 2: If there's a finding ID in the original data\nif (data.finding && data.finding.detail && data.finding.detail.id) {\n  sirtID = 'SIR-' + data.finding.detail.id.substring(0, 8);\n}\n\n// Option 3: Use GuardDuty finding ID with timestamp\nif (data.finding && data.finding.detail && data.finding.detail.service) {\n  const service = data.finding.detail.service;\n  if (service.eventFirstSeen) {\n    const year = new Date(service.eventFirstSeen).getFullYear();\n    const id = data.finding.detail.id.substring(0, 6);\n    sirtID = 'SIR-' + year + '-' + id;\n  }\n}\n\n// Option 4: Use finding ID from Security Hub\nif (data.finding && data.finding.Id) {\n  sirtID = 'SIR-' + data.finding.Id.substring(0, 8);\n}\n\n// ============================================\n// STEP 2: Map Resource Types to Lambda Functions\n// ============================================\nconst lambdaConfigs = {\n  'ec2-instance': {\n    functionName: 'contain-ec2-instance',\n    buildPayload: (data) => ({\n      targetInstanceId: data.resourceId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription,\n      instanceDetails: data.additionalDetails || {}\n    })\n  },\n  \n  's3-bucket': {\n    functionName: 'contain-s3-bucket',\n    buildPayload: (data) => ({\n      targetBucketName: data.resourceId,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'iam-user': {\n    functionName: 'contain-iam-user',\n    buildPayload: (data) => ({\n      targetUserName: data.resourceId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      accessKeyId: data.accessKeyId,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'iam-role': {\n    functionName: 'contain-iam-role',\n    buildPayload: (data) => ({\n      targetRoleName: data.resourceId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'lambda-function': {\n    functionName: 'contain-lambda-function',\n    buildPayload: (data) => ({\n      targetFunctionName: data.resourceId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'rds-instance': {\n    functionName: 'contain-rds-instance',\n    buildPayload: (data) => ({\n      targetDBInstanceIdentifier: data.resourceId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'access-key': {\n    functionName: 'contain-access-key',\n    buildPayload: (data) => ({\n      targetAccessKeyId: data.resourceId,\n      targetUserName: data.iamUserName,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'sts-session': {\n    functionName: 'contain-sts-session',\n    buildPayload: (data) => ({\n      targetAccessKeyId: data.accessKeyId,\n      targetUserName: data.iamUserName,\n      targetSessionId: data.sessionId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  },\n  \n  'sts-temp-credentials': {\n    functionName: 'contain-sts-session',\n    buildPayload: (data) => ({\n      targetAccessKeyId: data.accessKeyId,\n      targetUserName: data.iamUserName,\n      targetSessionId: data.sessionId,\n      targetAccount: data.accountId,\n      targetRegion: data.region,\n      sirtID: sirtID,  // Use the extracted SIR ID\n      severity: data.severity,\n      alertDescription: data.alertDescription\n    })\n  }\n};\n\n// ============================================\n// STEP 3: Build the Lambda Payload\n// ============================================\nconst resourceType = data.resourceType;\nconst config = lambdaConfigs[resourceType];\n\n// Default configuration for unknown resource types\nlet functionName = 'contain-unknown-resource';\nlet lambdaPayload = {\n  targetResourceType: resourceType,\n  targetResourceId: data.resourceId,\n  targetAccount: data.accountId,\n  targetRegion: data.region,\n  sirtID: sirtID,  // Use the extracted SIR ID\n  severity: data.severity,\n  alertDescription: data.alertDescription\n};\n\n// If we have a configuration, use it\nif (config) {\n  functionName = config.functionName;\n  lambdaPayload = config.buildPayload(data);\n}\n\n// ============================================\n// STEP 4: Add Debug Info (Optional)\n// ============================================\nconsole.log('SIR ID:', sirtID);\nconsole.log('Resource Type:', resourceType);\nconsole.log('Lambda Function:', functionName);\nconsole.log('Payload:', JSON.stringify(lambdaPayload));\n\n// ============================================\n// STEP 5: Return the Data\n// ============================================\nreturn [{\n  json: {\n    ...data,\n    functionName: functionName,\n    lambdaPayload: lambdaPayload,\n    sirtID: sirtID,  // Make SIR ID available for later nodes\n    lambdaSummary: 'Invoking ' + functionName + ' for ' + resourceType + ': ' + data.resourceId + ' (SIR: ' + sirtID + ')'\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        -176
+      ],
+      "id": "6b716f2e-5f7e-424c-9781-21e88c47ed94",
+      "name": "Build Lambda Payload, map with function names"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Code (setting up sns subscription)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code (setting up sns subscription)": {
+      "main": [
+        [
+          {
+            "node": "Determine Containment Action (IF Node)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Containment Action (IF Node)": {
+      "main": [
+        [
+          {
+            "node": "Build Lambda Payload, map with function names",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AWS SNS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch(Actions by Resource Type)": {
+      "main": [
+        [],
+        []
+      ]
+    },
+    "Code (Process Lambda Response)": {
+      "main": [
+        [
+          {
+            "node": "AWS SNS1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AWS SNS1": {
+      "main": [
+        [
+          {
+            "node": "Code ( CloudWatch-Focused Logging)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code ( CloudWatch-Focused Logging)": {
+      "main": [
+        [
+          {
+            "node": "CloudWatch Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Get a search report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoke AWS Lambda": {
+      "main": [
+        [
+          {
+            "node": "Code (Process Lambda Response)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Lambda Payload, map with function names": {
+      "main": [
+        [
+          {
+            "node": "Invoke AWS Lambda",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ccfa0ad9-c4c5-4269-9c74-fe32dd390c6c",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "b5abafdad1ab1678fa8081593bb5ae1c635d18ce6c1569f43018a8fead223659"
+  },
+  "nodeGroups": [],
+  "id": "65NbgFiSTt3avbLI",
+  "tags": []
+}
