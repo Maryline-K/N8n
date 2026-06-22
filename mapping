@@ -1,0 +1,173 @@
+// Get the incoming data
+const data = $input.first().json;
+
+// ============================================
+// STEP 1: Provider-Specific Mappings
+// ============================================
+
+// AWS Lambda function mappings (existing)
+const awsFunctionMap = {
+  'ec2-instance': 'contain-ec2-instance',
+  's3-bucket': 'contain-s3-bucket',
+  'iam-user': 'contain-iam-user',
+  'iam-role': 'contain-iam-role',
+  'lambda-function': 'contain-lambda-function',
+  'rds-instance': 'contain-rds-instance',
+  'access-key': 'contain-access-key',
+  'sts-session': 'contain-sts-session'
+};
+
+// GCP Cloud Function mappings (existing)
+const gcpFunctionMap = {
+  'gce-instance': 'contain-gce-instance',
+  'gcs-bucket': 'contain-gcs-bucket',
+  'gcp-cloud-function': 'contain-gcp-cloud-function',
+  'bigquery-dataset': 'contain-bigquery-dataset',
+  'cloudsql-instance': 'contain-cloudsql-instance'
+};
+
+// Azure Function mappings (existing)
+const azureFunctionMap = {
+  'azure-vm': 'contain-azure-vm',
+  'azure-storage': 'contain-azure-storage',
+  'azure-function': 'contain-azure-function',
+  'azure-sql': 'contain-azure-sql',
+  'azure-keyvault': 'contain-azure-keyvault'
+};
+
+// ============================================
+// STEP 2: OpenShift Action Mappings (NO FUNCTIONS)
+// ============================================
+const openshiftActionMap = {
+  'pod': {
+    action: 'delete-pod',
+    endpoint: '/api/v1/namespaces/{{ namespace }}/pods/{{ resourceId }}',
+    method: 'DELETE',
+    description: 'Delete compromised pod'
+  },
+  'deployment': {
+    action: 'scale-deployment',
+    endpoint: '/apis/apps/v1/namespaces/{{ namespace }}/deployments/{{ resourceId }}/scale',
+    method: 'PUT',
+    description: 'Scale deployment to 0'
+  },
+  'namespace': {
+    action: 'suspend-namespace',
+    endpoint: '/api/v1/namespaces/{{ resourceId }}/finalize',
+    method: 'PUT',
+    description: 'Suspend namespace'
+  },
+  'service': {
+    action: 'block-service',
+    endpoint: '/api/v1/namespaces/{{ namespace }}/services/{{ resourceId }}',
+    method: 'PATCH',
+    description: 'Block service access'
+  }
+};
+
+// ============================================
+// STEP 3: MS365 Action Mappings (NO FUNCTIONS)
+// ============================================
+const ms365ActionMap = {
+  'user': {
+    action: 'block-user',
+    endpoint: '/v1.0/users/{{ resourceId }}',
+    method: 'PATCH',
+    body: { accountEnabled: false },
+    description: 'Block user sign-in'
+  },
+  'mailbox': {
+    action: 'disable-mailbox',
+    endpoint: '/v1.0/users/{{ resourceId }}/mailboxSettings',
+    method: 'PATCH',
+    body: { automaticRepliesSetting: { status: 'disabled' } },
+    description: 'Disable mailbox'
+  },
+  'group': {
+    action: 'disable-group',
+    endpoint: '/v1.0/groups/{{ resourceId }}',
+    method: 'PATCH',
+    body: { visibility: 'hidden' },
+    description: 'Hide group from global address list'
+  },
+  'onedrive': {
+    action: 'block-onedrive',
+    endpoint: '/v1.0/users/{{ resourceId }}/drive',
+    method: 'DELETE',
+    description: 'Remove OneDrive access'
+  },
+  'service-principal': {
+    action: 'disable-service-principal',
+    endpoint: '/v1.0/servicePrincipals/{{ resourceId }}',
+    method: 'PATCH',
+    body: { accountEnabled: false },
+    description: 'Disable service principal'
+  }
+};
+
+// ============================================
+// STEP 4: Build Payload Based on Provider
+// ============================================
+const provider = data.provider || 'unknown';
+let functionName = null;
+let lambdaPayload = {};
+let actionType = 'function'; // 'function' or 'api'
+let apiConfig = null;
+
+if (provider === 'aws') {
+  functionName = awsFunctionMap[data.resourceType] || 'contain-aws-unknown';
+  lambdaPayload = buildAWSPayload(data);
+  actionType = 'function';
+} else if (provider === 'gcp') {
+  functionName = gcpFunctionMap[data.resourceType] || 'contain-gcp-unknown';
+  lambdaPayload = buildGCPPayload(data);
+  actionType = 'function';
+} else if (provider === 'azure') {
+  functionName = azureFunctionMap[data.resourceType] || 'contain-azure-unknown';
+  lambdaPayload = buildAzurePayload(data);
+  actionType = 'function';
+} else if (provider === 'openshift') {
+  // OpenShift - NO FUNCTION, direct API call
+  const action = openshiftActionMap[data.resourceType] || openshiftActionMap['pod'];
+  apiConfig = {
+    action: action.action,
+    endpoint: action.endpoint
+      .replace('{{ namespace }}', data.namespace || 'default')
+      .replace('{{ resourceId }}', data.resourceId),
+    method: action.method,
+    body: action.body || {},
+    description: action.description
+  };
+  actionType = 'api';
+  functionName = 'openshift-contain-' + data.resourceType;
+} else if (provider === 'ms365') {
+  // MS365 - NO FUNCTION, direct Graph API call
+  const action = ms365ActionMap[data.resourceType] || ms365ActionMap['user'];
+  apiConfig = {
+    action: action.action,
+    endpoint: action.endpoint.replace('{{ resourceId }}', data.resourceId),
+    method: action.method,
+    body: action.body || {},
+    description: action.description
+  };
+  actionType = 'api';
+  functionName = 'ms365-contain-' + data.resourceType;
+}
+
+// ============================================
+// STEP 5: Return Data
+// ============================================
+return [{
+  json: {
+    ...data,
+    provider: provider,
+    functionName: functionName,
+    lambdaPayload: lambdaPayload,
+    actionType: actionType, // 'function' or 'api'
+    apiConfig: apiConfig, // For OpenShift and MS365
+    providerType: provider,
+    lambdaSummary: actionType === 'function' 
+      ? `Invoking ${functionName} for ${provider}:${data.resourceType}`
+      : `Calling ${provider} API: ${apiConfig.action} for ${data.resourceType}`
+  }
+}];
