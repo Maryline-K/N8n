@@ -1,0 +1,470 @@
+// Get the incoming data from the webhook
+const data = $input.first().json;
+
+// ============================================
+// STEP 1: Helper Functions
+// ============================================
+
+// Detect cloud provider from ARN/ID
+function detectProvider(arn) {
+  if (!arn) return 'unknown';
+  if (typeof arn !== 'string') return 'unknown';
+  
+  if (arn.startsWith('arn:aws:')) return 'aws';
+  if (arn.startsWith('arn:gcp:')) return 'gcp';
+  if (arn.startsWith('arn:azure:') || arn.startsWith('/subscriptions/')) return 'azure';
+  if (arn.includes('openshift') || arn.includes('ocp') || arn.includes('k8s')) return 'openshift';
+  if (arn.includes('office365') || arn.includes('microsoft') || arn.includes('m365')) return 'ms365';
+  if (arn.includes('gcp')) return 'gcp';
+  if (arn.includes('azure')) return 'azure';
+  return 'unknown';
+}
+
+// Extract resource ID from ARN
+function extractResourceIdFromArn(arn) {
+  if (!arn || typeof arn !== 'string') return null;
+  
+  const arnParts = arn.split(':');
+  if (arnParts.length > 5) {
+    const resourcePart = arnParts[5];
+    const resourceParts = resourcePart.split('/');
+    return resourceParts[resourceParts.length - 1];
+  }
+  return null;
+}
+
+// Normalize resource type for AWS
+function normalizeAWSResourceType(type) {
+  const typeMap = {
+    'VIRTUAL_MACHINE': 'ec2-instance',
+    'EC2Instance': 'ec2-instance',
+    'AwsEc2Instance': 'ec2-instance',
+    'S3Bucket': 's3-bucket',
+    'AwsS3Bucket': 's3-bucket',
+    'IAMUser': 'iam-user',
+    'AwsIamUser': 'iam-user',
+    'IAMRole': 'iam-role',
+    'AwsIamRole': 'iam-role',
+    'LambdaFunction': 'lambda-function',
+    'AwsLambdaFunction': 'lambda-function',
+    'RDSInstance': 'rds-instance',
+    'AwsRdsDbInstance': 'rds-instance',
+    'AccessKey': 'access-key',
+    'STSSession': 'sts-session'
+  };
+  return typeMap[type] || type.toLowerCase().replace(/aws/i, '').trim() || 'unknown';
+}
+
+// Normalize resource type for GCP
+function normalizeGCPResourceType(type) {
+  const typeMap = {
+    'VIRTUAL_MACHINE': 'gce-instance',
+    'GCEInstance': 'gce-instance',
+    'GCSBucket': 'gcs-bucket',
+    'CloudFunction': 'gcp-cloud-function',
+    'BigQueryDataset': 'bigquery-dataset',
+    'CloudSQLInstance': 'cloudsql-instance'
+  };
+  return typeMap[type] || type.toLowerCase().replace(/gcp/i, '').trim() || 'unknown';
+}
+
+// Normalize resource type for Azure
+function normalizeAzureResourceType(type) {
+  const typeMap = {
+    'VIRTUAL_MACHINE': 'azure-vm',
+    'AzureVM': 'azure-vm',
+    'StorageAccount': 'azure-storage',
+    'FunctionApp': 'azure-function',
+    'SQLDatabase': 'azure-sql',
+    'KeyVault': 'azure-keyvault'
+  };
+  return typeMap[type] || type.toLowerCase().replace(/azure/i, '').trim() || 'unknown';
+}
+
+// Normalize resource type for OpenShift
+function normalizeOpenShiftResourceType(type) {
+  const typeMap = {
+    'POD': 'pod',
+    'Deployment': 'deployment',
+    'Namespace': 'namespace',
+    'Service': 'service',
+    'Route': 'route',
+    'ConfigMap': 'configmap',
+    'Secret': 'secret',
+    'ServiceAccount': 'service-account',
+    'Role': 'role',
+    'ClusterRole': 'cluster-role',
+    'RoleBinding': 'role-binding',
+    'ClusterRoleBinding': 'cluster-role-binding'
+  };
+  return typeMap[type] || type.toLowerCase() || 'pod';
+}
+
+// Normalize resource type for MS365
+function normalizeMS365ResourceType(type) {
+  const typeMap = {
+    'USER': 'user',
+    'Mailbox': 'mailbox',
+    'Group': 'group',
+    'OneDrive': 'onedrive',
+    'ServicePrincipal': 'service-principal',
+    'Application': 'application',
+    'SharePoint': 'sharepoint',
+    'Teams': 'teams'
+  };
+  return typeMap[type] || type.toLowerCase() || 'user';
+}
+
+// ============================================
+// STEP 2: Determine if Finding is from Wiz
+// ============================================
+const finding = data;
+
+// ============================================
+// STEP 3: Initialize Variables
+// ============================================
+let resourceId = null;
+let resourceType = null;
+let resourceArn = null;
+let accountId = null;
+let severity = null;
+let alertType = null;
+let alertDescription = null;
+let region = null;
+let provider = 'unknown';
+let findingSource = 'Wiz';
+let namespace = null;
+let resourceGroup = null;
+let zone = null;
+let sirtID = null;
+let clusterName = null;
+let tenantId = null;
+
+// ============================================
+// STEP 4: Parse Based on Finding Type
+// ============================================
+
+// --- 4a: Vulnerability Finding (CVE) ---
+if (finding.vulnerableAsset) {
+  alertType = finding.name || finding.CVE || 'CVE';
+  alertDescription = finding.CVEDescription || finding.description || 'Vulnerability finding';
+  severity = finding.severity;
+  
+  const asset = finding.vulnerableAsset;
+  if (asset.providerUniqueId) {
+    resourceArn = asset.providerUniqueId;
+    provider = detectProvider(resourceArn);
+    resourceId = extractResourceIdFromArn(resourceArn) || asset.name || asset.id;
+  }
+  
+  if (asset.type) {
+    if (provider === 'aws') resourceType = normalizeAWSResourceType(asset.type);
+    else if (provider === 'gcp') resourceType = normalizeGCPResourceType(asset.type);
+    else if (provider === 'azure') resourceType = normalizeAzureResourceType(asset.type);
+    else if (provider === 'openshift') resourceType = normalizeOpenShiftResourceType(asset.type);
+    else if (provider === 'ms365') resourceType = normalizeMS365ResourceType(asset.type);
+    else resourceType = asset.type.toLowerCase();
+  }
+  
+  region = asset.region || asset.location;
+  accountId = asset.subscriptionExternalId || asset.projectId || asset.subscriptionId;
+  zone = asset.zone;
+  clusterName = asset.clusterName || asset.cluster;
+  tenantId = asset.tenantId || asset.tenant;
+}
+
+// --- 4b: CSPM Finding ---
+else if (finding.ruleName || finding.ruleId) {
+  alertType = finding.ruleName || finding.ruleId || 'CSPM Finding';
+  alertDescription = finding.remediationNotes || finding.description || 'CSPM finding';
+  severity = finding.severity;
+  
+  accountId = finding.targetAccountIdentifier || finding.subscriptionId || finding.projectId || finding.accountId;
+  region = finding.targetRegion || finding.region || finding.location;
+  zone = finding.zone;
+  resourceGroup = finding.resourceGroup;
+  namespace = finding.namespace;
+  clusterName = finding.clusterName || finding.cluster;
+  tenantId = finding.tenantId || finding.tenant;
+  
+  resourceId = finding.targetResourceIdentifier || finding.resourceId || finding.targetResourceId || finding.name;
+  resourceArn = finding.targetResourceArn || finding.resourceArn || finding.providerUniqueId;
+  
+  if (finding.targetAccountType) {
+    provider = finding.targetAccountType.toLowerCase();
+  } else if (resourceArn) {
+    provider = detectProvider(resourceArn);
+  } else if (accountId) {
+    if (accountId.startsWith('arn:aws:')) provider = 'aws';
+    else if (accountId.includes('gcp')) provider = 'gcp';
+    else if (accountId.includes('azure')) provider = 'azure';
+    else if (accountId.includes('openshift') || accountId.includes('ocp')) provider = 'openshift';
+    else if (accountId.includes('m365') || accountId.includes('office')) provider = 'ms365';
+  }
+  
+  const rawType = finding.targetResourceSubtype || finding.resourceType || finding.targetResourceType || finding.resourceSubtype;
+  if (rawType) {
+    if (provider === 'aws') resourceType = normalizeAWSResourceType(rawType);
+    else if (provider === 'gcp') resourceType = normalizeGCPResourceType(rawType);
+    else if (provider === 'azure') resourceType = normalizeAzureResourceType(rawType);
+    else if (provider === 'openshift') resourceType = normalizeOpenShiftResourceType(rawType);
+    else if (provider === 'ms365') resourceType = normalizeMS365ResourceType(rawType);
+    else resourceType = rawType.toLowerCase();
+  }
+  
+  if (!resourceType || resourceType === 'unknown') {
+    if (resourceId && resourceId.startsWith('i-')) resourceType = 'ec2-instance';
+    else if (resourceId && resourceId.includes('bucket')) resourceType = 's3-bucket';
+    else if (resourceId && resourceId.includes('user')) resourceType = 'iam-user';
+    else if (resourceId && resourceId.includes('pod')) resourceType = 'pod';
+    else if (resourceId && resourceId.includes('deployment')) resourceType = 'deployment';
+  }
+}
+
+// --- 4c: Malware Finding ---
+else if (finding.malware || finding.malwareDetails) {
+  const malware = finding.malware || finding.malwareDetails;
+  alertType = malware.name || 'Malware Detected';
+  alertDescription = malware.description || finding.description || 'Malware detected';
+  severity = finding.severity || 'CRITICAL';
+  
+  if (finding.resource) {
+    const resource = finding.resource;
+    resourceArn = resource.providerUniqueId || resource.arn;
+    provider = detectProvider(resourceArn || resource.id);
+    resourceId = resource.name || resource.id || finding.resourceId;
+    resourceType = resource.type || resource.resourceType || 'Resource';
+    region = resource.region || resource.location;
+    accountId = resource.subscriptionId || resource.projectId || resource.accountId;
+    clusterName = resource.clusterName || resource.cluster;
+    tenantId = resource.tenantId || resource.tenant;
+    namespace = resource.namespace;
+    
+    if (provider === 'aws') resourceType = normalizeAWSResourceType(resourceType);
+    else if (provider === 'gcp') resourceType = normalizeGCPResourceType(resourceType);
+    else if (provider === 'azure') resourceType = normalizeAzureResourceType(resourceType);
+    else if (provider === 'openshift') resourceType = normalizeOpenShiftResourceType(resourceType);
+    else if (provider === 'ms365') resourceType = normalizeMS365ResourceType(resourceType);
+  }
+}
+
+// --- 4d: Container/Kubernetes/OpenShift Finding ---
+else if (finding.container || finding.cluster || finding.namespace || finding.pod || finding.deployment) {
+  alertType = finding.alertType || finding.findingType || 'Container Security Finding';
+  alertDescription = finding.description || 'Container/OpenShift security finding';
+  severity = finding.severity || 'HIGH';
+  
+  resourceId = finding.containerId || finding.podName || finding.pod || finding.deploymentName || finding.deployment || finding.clusterName || finding.cluster;
+  resourceType = finding.resourceType || 'pod';
+  namespace = finding.namespace || finding.namespaceName || 'default';
+  provider = 'openshift';
+  clusterName = finding.clusterName || finding.cluster || 'unknown-cluster';
+  
+  // Normalize OpenShift resource type
+  if (resourceType) {
+    resourceType = normalizeOpenShiftResourceType(resourceType);
+  }
+  
+  accountId = finding.accountId || finding.subscriptionId || finding.projectId;
+  region = finding.region || finding.clusterRegion;
+  
+  // Extract ARN if available
+  resourceArn = finding.resourceArn || finding.arn || null;
+}
+
+// --- 4e: MS365 Finding ---
+else if (finding.user || finding.mailbox || finding.group || finding.tenant || finding.office365 || finding.m365) {
+  alertType = finding.alertType || finding.findingType || 'MS365 Security Finding';
+  alertDescription = finding.description || 'Microsoft 365 security finding';
+  severity = finding.severity || 'HIGH';
+  
+  provider = 'ms365';
+  tenantId = finding.tenantId || finding.tenant || finding.organizationId;
+  
+  // Determine resource type and ID
+  if (finding.user) {
+    resourceType = 'user';
+    resourceId = finding.user.id || finding.user.userPrincipalName || finding.user.username || finding.user;
+  } else if (finding.mailbox) {
+    resourceType = 'mailbox';
+    resourceId = finding.mailbox.id || finding.mailbox.userPrincipalName || finding.mailbox;
+  } else if (finding.group) {
+    resourceType = 'group';
+    resourceId = finding.group.id || finding.group.displayName || finding.group;
+  } else if (finding.servicePrincipal) {
+    resourceType = 'service-principal';
+    resourceId = finding.servicePrincipal.id || finding.servicePrincipal.appId || finding.servicePrincipal;
+  } else {
+    resourceType = 'user';
+    resourceId = finding.resourceId || finding.id || finding.name || 'unknown';
+  }
+  
+  // Normalize MS365 resource type
+  if (resourceType) {
+    resourceType = normalizeMS365ResourceType(resourceType);
+  }
+  
+  accountId = finding.accountId || finding.subscriptionId || finding.tenantId || finding.tenant;
+  region = finding.region || 'global';
+  resourceArn = finding.resourceArn || finding.arn || null;
+}
+
+// --- 4f: Generic Finding (Fallback) ---
+else {
+  alertType = finding.type || finding.findingType || finding.alertType || 'Security Finding';
+  alertDescription = finding.description || finding.message || finding.details || finding.summary || 'Security alert from Wiz';
+  severity = finding.severity || finding.riskLevel || finding.priority || 'MEDIUM';
+  
+  resourceId = finding.resourceId || finding.resourceName || finding.targetResource || finding.assetId || finding.id;
+  resourceArn = finding.resourceArn || finding.arn || finding.providerUniqueId || finding.targetResourceArn;
+  accountId = finding.accountId || finding.subscriptionId || finding.projectId || finding.awsAccountId || finding.targetAccount;
+  region = finding.region || finding.location || finding.awsRegion || finding.targetRegion;
+  resourceType = finding.resourceType || finding.assetType || finding.type || 'Resource';
+  namespace = finding.namespace || null;
+  clusterName = finding.clusterName || finding.cluster || null;
+  tenantId = finding.tenantId || finding.tenant || null;
+  
+  provider = detectProvider(resourceArn || resourceId || '');
+  
+  // If provider is still unknown, try to detect from other fields
+  if (provider === 'unknown') {
+    if (finding.provider) {
+      provider = finding.provider.toLowerCase();
+    } else if (finding.cloud) {
+      provider = finding.cloud.toLowerCase();
+    } else if (finding.platform) {
+      provider = finding.platform.toLowerCase();
+    }
+  }
+  
+  if (provider === 'aws') resourceType = normalizeAWSResourceType(resourceType);
+  else if (provider === 'gcp') resourceType = normalizeGCPResourceType(resourceType);
+  else if (provider === 'azure') resourceType = normalizeAzureResourceType(resourceType);
+  else if (provider === 'openshift') resourceType = normalizeOpenShiftResourceType(resourceType);
+  else if (provider === 'ms365') resourceType = normalizeMS365ResourceType(resourceType);
+}
+
+// ============================================
+// STEP 5: Generate SIR ID
+// ============================================
+if (finding.id) {
+  sirtID = 'SIR-' + finding.id.substring(0, 8);
+} else if (finding.findingId) {
+  sirtID = 'SIR-' + finding.findingId.substring(0, 8);
+} else if (finding.alertId) {
+  sirtID = 'SIR-' + finding.alertId.substring(0, 8);
+} else {
+  sirtID = 'SIR-' + new Date().getFullYear() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// ============================================
+// STEP 6: Map Severity to Numeric Value (for AI)
+// ============================================
+let severityNumeric = 0;
+if (typeof severity === 'number') {
+  severityNumeric = severity;
+} else if (typeof severity === 'string') {
+  const severityMap = { 'CRITICAL': 10, 'HIGH': 8, 'MEDIUM': 5, 'LOW': 3, 'INFO': 1 };
+  severityNumeric = severityMap[severity.toUpperCase()] || 5;
+}
+
+// ============================================
+// STEP 7: Extract Additional Context for AI
+// ============================================
+let additionalContext = {};
+
+if (finding.resource) {
+  additionalContext.resourceDetails = finding.resource;
+}
+
+if (finding.vulnerability) {
+  additionalContext.vulnerabilityDetails = finding.vulnerability;
+}
+
+if (finding.compliance) {
+  additionalContext.complianceDetails = finding.compliance;
+}
+
+if (finding.container) {
+  additionalContext.containerDetails = finding.container;
+}
+
+if (finding.cluster) {
+  additionalContext.clusterDetails = finding.cluster;
+}
+
+if (finding.user) {
+  additionalContext.userDetails = finding.user;
+}
+
+// Add OpenShift-specific context
+if (provider === 'openshift') {
+  additionalContext.openshift = {
+    namespace: namespace,
+    cluster: clusterName,
+    resourceType: resourceType,
+    resourceId: resourceId
+  };
+}
+
+// Add MS365-specific context
+if (provider === 'ms365') {
+  additionalContext.ms365 = {
+    tenantId: tenantId,
+    resourceType: resourceType,
+    resourceId: resourceId
+  };
+}
+
+// Try to extract the actual alert message if available
+let rawAlertMessage = finding.message || 
+                      finding.description || 
+                      finding.details || 
+                      finding.alertMessage || 
+                      null;
+
+// ============================================
+// STEP 8: Prepare Output (NO needsContainment)
+// ============================================
+return [{
+  json: {
+    // Message type for workflow routing
+    messageType: 'Notification',
+    
+    // Provider information
+    provider: provider,
+    
+    // Resource information
+    resourceType: resourceType || 'unknown',
+    resourceId: resourceId || 'unknown',
+    resourceArn: resourceArn || null,
+    
+    // Account and region
+    accountId: accountId || 'unknown',
+    region: region || 'us-east-1',
+    namespace: namespace || null,
+    resourceGroup: resourceGroup || null,
+    zone: zone || null,
+    clusterName: clusterName || null,
+    tenantId: tenantId || null,
+    
+    // Alert information (for AI to decide)
+    alertType: alertType || 'Unknown',
+    alertDescription: alertDescription || 'No description available',
+    severity: severityNumeric,
+    severityLabel: severity || 'UNKNOWN',
+    findingSource: findingSource,
+    sirtID: sirtID,
+    
+    // Additional context for AI
+    additionalContext: additionalContext,
+    rawAlertMessage: rawAlertMessage,
+    
+    // Full finding for AI analysis
+    finding: finding,
+    originalMessage: data,
+    
+    // Summary for logging
+    alertSummary: `[${findingSource}] ${alertType} on ${provider}:${resourceType} (${resourceId})`
+  }
+}];
